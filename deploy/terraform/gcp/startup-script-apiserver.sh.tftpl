@@ -3,6 +3,11 @@
 # Runs on every boot, but the install/build step is gated by a marker file.
 set -euxo pipefail
 
+# startup-scripts run without a normal user environment; rustup and cargo both
+# expect HOME to be set so they can write to ~/.cargo, ~/.rustup.
+export HOME=/root
+export PATH="$HOME/.cargo/bin:$PATH"
+
 INSTALL_MARKER=/var/arlee/installed
 mkdir -p /var/arlee /etc/arlee /opt
 

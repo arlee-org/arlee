@@ -3,6 +3,11 @@
 # Installs Docker + builds the Rust edge binary, then registers with the Apiserver.
 set -euxo pipefail
 
+# startup-scripts run without a normal user environment; rustup and cargo both
+# expect HOME to be set so they can write to ~/.cargo, ~/.rustup.
+export HOME=/root
+export PATH="$HOME/.cargo/bin:$PATH"
+
 INSTALL_MARKER=/var/arlee/installed
 mkdir -p /var/arlee /var/arlee/trajectories /etc/arlee /opt
 
