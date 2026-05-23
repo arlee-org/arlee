@@ -33,7 +33,7 @@ The three words in the name each carve out part of the scope:
 
 ## Design Inspiration
 
-Arlee draws directly on the interface design of **DeepSeek Elastic Compute (DSec)** described in the DeepSeek V4 report — in particular, the idea of a single SDK abstracting multiple execution substrates (function call / container / microVM / fullVM) behind a unified command-execution, file-transfer, and TTY surface, plus globally ordered per-sandbox trajectory logs that enable replay and preemption-safe resumption. Arlee aims to be a community implementation of that interface shape; it will not attempt DSec-level optimizations on day one.
+Arlee draws directly on the interface design of **DeepSeek Elastic Compute (DSec)** described in the [DeepSeek V4 report](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/blob/main/DeepSeek_V4.pdf) — in particular, the idea of a single SDK abstracting multiple execution substrates (function call / container / microVM / fullVM) behind a unified command-execution, file-transfer, and TTY surface, plus globally ordered per-sandbox trajectory logs that enable replay and preemption-safe resumption. Arlee aims to be a community implementation of that interface shape; it will not attempt DSec-level optimizations on day one.
 
 ## Core Capabilities (Target)
 
