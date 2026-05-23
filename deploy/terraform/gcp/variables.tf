@@ -55,7 +55,7 @@ variable "image_project" {
 variable "git_repo" {
   description = "Git URL to clone arlee source from on first boot"
   type        = string
-  default     = "https://github.com/devcc98/arlee.git"
+  default     = "https://github.com/arlee-org/arlee.git"
 }
 
 variable "git_ref" {

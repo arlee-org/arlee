@@ -13,7 +13,7 @@ single GCP project: 1 Apiserver VM + N Edge VMs (default N=2), in one VPC.
   ```
 - `terraform >= 1.6`.
 - The repo pushed to the Git URL configured in `git_repo` (default
-  `https://github.com/devcc98/arlee.git`, `main` branch). The VMs clone this
+  `https://github.com/arlee-org/arlee.git`, `main` branch). The VMs clone this
   on first boot and run `cargo build --release`.
 
 ## 5-minute deploy
