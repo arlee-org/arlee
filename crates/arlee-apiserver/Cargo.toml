@@ -1,0 +1,30 @@
+[package]
+name = "arlee-apiserver"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Arlee API gateway: edge registry + scheduler + forwarding proxy."
+
+[[bin]]
+name = "arlee-apiserver"
+path = "src/main.rs"
+
+[dependencies]
+arlee-models.workspace = true
+tokio.workspace = true
+axum.workspace = true
+reqwest.workspace = true
+tower-http.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+futures.workspace = true
+parking_lot.workspace = true

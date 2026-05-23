@@ -1,0 +1,34 @@
+[package]
+name = "arlee-edge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Arlee per-host agent: runs Docker sandboxes and writes trajectories."
+
+[[bin]]
+name = "arlee-edge"
+path = "src/main.rs"
+
+[dependencies]
+arlee-models.workspace = true
+tokio.workspace = true
+axum.workspace = true
+reqwest.workspace = true
+tower-http.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+sha2.workspace = true
+hex.workspace = true
+tar.workspace = true
+bollard.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+futures.workspace = true
+parking_lot.workspace = true

@@ -1,0 +1,69 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/arlee-models",
+    "crates/arlee-apiserver",
+    "crates/arlee-edge",
+    "crates/arlee-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Arlee contributors"]
+repository = "https://github.com/devcc98/arlee"
+rust-version = "1.75"
+
+[workspace.dependencies]
+arlee-models = { path = "crates/arlee-models" }
+
+# async runtime
+tokio = { version = "1.40", features = ["full"] }
+
+# http
+axum = "0.7"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace"] }
+
+# serde
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# time / id
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.10", features = ["v4", "serde"] }
+
+# hashing
+sha2 = "0.10"
+hex = "0.4"
+
+# tar (for docker put_archive / get_archive)
+tar = "0.4"
+
+# docker client
+bollard = "0.17"
+
+# error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# cli
+clap = { version = "4.5", features = ["derive", "env"] }
+
+# futures helpers
+futures = "0.3"
+
+# parking_lot for sync mutexes inside async (used sparingly)
+parking_lot = "0.12"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

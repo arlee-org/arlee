@@ -1,0 +1,25 @@
+[package]
+name = "arlee-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Arlee operator CLI: terraform wrapper + Apiserver HTTP client."
+
+[[bin]]
+name = "arlee"
+path = "src/main.rs"
+
+[dependencies]
+arlee-models.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

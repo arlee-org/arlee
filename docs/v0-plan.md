@@ -6,9 +6,18 @@ This document specifies the v0 design and the verifiable checkpoints that define
 
 3 SWE-bench Verified gold patches pass via Arlee, sandboxes distributed across 2 Edge VMs on GCP. No LLM in the loop — gold patches act as the agent, which makes v0 a regression test for Arlee itself.
 
+## Language split
+
+| Component | Language | Why |
+|---|---|---|
+| Apiserver, Edge, CLI | **Rust** (axum + tokio + bollard, clap) | Long-running services + DSec parity; per-host density / RPC performance ceiling matters as we scale |
+| SDK | **Python** (httpx + pydantic) | RL ecosystem (verl / slime / TRL / OpenRLHF) is Python; SDK has to be importable from the consumer's training loop |
+
+Wire protocol between every pair is plain HTTP + JSON (intra-VPC), so the language split is invisible on the wire.
+
 ## Architecture
 
-Three runtime components, all in cloud. The only thing on the developer's laptop is a thin CLI (HTTP client wrapping Terraform and Apiserver calls).
+Three runtime components, all in cloud. The only thing on the developer's laptop is a thin CLI (Rust HTTP client wrapping Terraform and Apiserver calls).
 
 ```
    Laptop:  arlee CLI ──┐
@@ -17,45 +26,48 @@ Three runtime components, all in cloud. The only thing on the developer's laptop
    ┌─ GCP project, single VPC ─────────────────────────────┐
    │                                                       │
    │   Apiserver VM (e2-small)                             │
-   │     └── Apiserver process (FastAPI)                   │
+   │     └── arlee-apiserver (Rust, axum)                  │
    │           ▲                                           │
    │           │ HTTP (token, intra-VPC)                   │
    │           ▼                                           │
    │   Edge VM #1, #2 (e2-standard-4 × 2)                  │
-   │     └── Edge process + Docker daemon                  │
+   │     └── arlee-edge (Rust, axum + bollard) + dockerd   │
    │                                                       │
    └───────────────────────────────────────────────────────┘
 ```
 
 ## Components
 
-### Apiserver
+### Apiserver (`crates/arlee-apiserver`)
 
-- FastAPI HTTP server, on its own e2-small VM.
-- In-memory state: Edge registry + sandbox registry. Not persisted. On restart, queries each known Edge to rebuild state.
-- Receives Edge self-registration (`POST /register`).
+- Rust binary built on axum + tokio + reqwest, on its own e2-small VM.
+- In-memory state: Edge registry + sandbox→edge mapping. Not persisted. On restart, queries each Edge that re-registers to rebuild the sandbox map.
+- Receives Edge self-registration (`POST /edges/register`) and heartbeat (`POST /edges/{id}/heartbeat`).
 - Schedules new sandboxes via least-loaded placement (Edge with fewest active sandboxes).
-- Acts as a forwarding proxy: client API calls land here, get routed to the Edge owning that sandbox.
+- Acts as a forwarding proxy: client API calls land here, get routed via `reqwest` to the Edge owning that sandbox.
 
-### Edge
+### Edge (`crates/arlee-edge`)
 
-- One per host. FastAPI HTTP server on `:8081`.
-- On startup, `POST /register` to the Apiserver (URL + token from systemd EnvironmentFile).
-- Periodic heartbeat with current sandbox count.
-- Wraps the host's Docker daemon via the `docker` Python SDK.
+- One per host. Rust binary built on axum + tokio + bollard, listening on `:8081`.
+- On startup, `POST /edges/register` to the Apiserver (URL + token from systemd EnvironmentFile). Re-registers on heartbeat 404.
+- Periodic 10-second heartbeat carrying current sandbox count.
+- Drives the host's Docker daemon via `bollard`: containers run `sleep infinity` with the image's entrypoint stripped, so we can `docker exec` arbitrary commands.
+- Serializes `exec`, `read_file`, `write_file` per sandbox via a per-sandbox `tokio::sync::Mutex`; runs sandboxes concurrently.
+- Caps `stdout`/`stderr` per exec at 64 KB with truncation flags so trajectory JSONL stays bounded.
 - Writes a JSONL trajectory file per sandbox under `/var/arlee/trajectories/<sandbox-id>.jsonl`, plus a metadata sidecar.
-- Serializes `exec` calls within a single sandbox (no concurrent commands per sandbox); runs sandboxes concurrently.
 
-### Python SDK (`arlee` package)
+### Python SDK (`python/arlee/`)
 
 - `httpx` async client. Each method maps 1:1 to an Apiserver endpoint.
 - `create_sandbox(image=..., substrate="container", env=..., timeout=...)` — `substrate` parameter is exposed on day 1 with `"container"` as the only valid value. This keeps the API forward-compatible when microVM / fullVM substrates land later.
 - Consumers: `examples/`, future RL framework adapters (verl / slime / etc).
+- Distributed via PyPI as `pip install arlee` (post-v0; v0 is from-source only).
 
-### CLI (`arlee` command, same package)
+### CLI (`crates/arlee-cli`, binary name `arlee`)
 
-- `arlee deploy` / `arlee destroy` — wrap `terraform apply` / `destroy`.
-- `arlee edges` / `arlee sandboxes` — list registries.
+- Rust binary, clap-based.
+- `arlee deploy` / `arlee destroy` — shell out to `terraform apply` / `destroy`.
+- `arlee edges` / `arlee sandboxes` — query Apiserver, print tables.
 - `arlee logs <sandbox-id> [--download PATH]` — fetch trajectory.
 - `arlee health` — overall component check.
 
@@ -87,12 +99,17 @@ Outputs: `apiserver_ip`, `edge_ips`, `token` (sensitive).
 | `POST /sandboxes` | `create_sandbox` | body: `image`, `substrate`, `env`, `timeout` |
 | `DELETE /sandboxes/{id}` | `kill_sandbox` | trajectory retained 24h after kill |
 | `POST /sandboxes/{id}/exec` | `exec` | body: `command`, `timeout`; returns `exit_code`, `stdout`, `stderr` |
-| `GET /sandboxes/{id}/files/{path}` | `read_file` | binary-safe |
-| `PUT /sandboxes/{id}/files/{path}` | `write_file` | binary-safe |
-| `GET /sandboxes/{id}/trajectory` | `get_trajectory` | returns JSONL |
+| `GET /sandboxes/{id}/file?path=...` | `read_file` | binary-safe; path passed as query param to avoid URL-encoding pain |
+| `PUT /sandboxes/{id}/file?path=...` | `write_file` | binary body; same path-as-query convention |
+| `GET /sandboxes/{id}/trajectory` | `get_trajectory` | returns JSON array of entries |
 | `GET /sandboxes` | `list_sandboxes` | includes status + owning Edge |
 | `GET /edges` | `list_edges` | includes health + sandbox count |
-| `GET /capacity` | `capacity` | per-Edge remaining schedulable capacity |
+| `GET /capacity` | `capacity` | per-Edge sandbox count + health |
+| `GET /health` | `health` | open endpoint (no token); reports edge counts |
+
+Edge-internal endpoints (called by Edges, not clients):
+- `POST /edges/register` — Edge self-registration on startup
+- `POST /edges/{id}/heartbeat` — every 10 seconds; 404 triggers re-registration
 
 Not in v0: TTY / PTY, snapshot, fork, replay, fast-forward, streaming exec output, Watcher component.
 
@@ -138,35 +155,39 @@ Together these capture enough to satisfy DSec's three trajectory uses (provenanc
 
 ```
 arlee/
-├── apiserver/
-│   ├── main.py          # FastAPI app
-│   ├── state.py         # edges + sandboxes registries
-│   └── scheduler.py     # least-loaded placement
-├── edge/
-│   ├── main.py
-│   ├── docker_runner.py
-│   └── trajectory.py    # JSONL writer
-├── sdk/
-│   ├── client.py        # httpx async client
-│   └── models.py        # shared pydantic models
-├── cli/
-│   └── __main__.py
-└── pyproject.toml       # uv
-deploy/
-├── terraform/gcp/
-│   ├── main.tf
-│   ├── variables.tf
-│   ├── outputs.tf
-│   └── cloud-init.yaml
-├── systemd/
-│   ├── arlee-apiserver.service
-│   └── arlee-edge.service
-└── README.md
-examples/
-└── swebench_runner.py
-docs/
-├── dsec.md
-└── v0-plan.md           # this file
+├── Cargo.toml                          # Rust workspace
+├── crates/
+│   ├── arlee-models/                   # shared serde wire types
+│   ├── arlee-apiserver/                # binary: API gateway + scheduler
+│   │   └── src/{main,api,state,scheduler,config,error}.rs
+│   ├── arlee-edge/                     # binary: per-host docker driver
+│   │   └── src/{main,api,docker_runner,trajectory,config,error}.rs
+│   └── arlee-cli/                      # binary: `arlee` command
+│       └── src/main.rs
+├── python/
+│   ├── pyproject.toml                  # hatchling, single `arlee` package
+│   └── arlee/
+│       ├── __init__.py                 # module-level convenience functions
+│       ├── client.py                   # httpx async client
+│       └── models.py                   # pydantic models matching arlee-models
+├── deploy/
+│   ├── terraform/gcp/
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   ├── outputs.tf
+│   │   └── cloud-init.yaml.tftpl       # rendered with token + apiserver URL
+│   ├── systemd/
+│   │   ├── arlee-apiserver.service
+│   │   └── arlee-edge.service
+│   └── README.md
+├── examples/
+│   └── swebench_runner.py
+├── docs/
+│   ├── dsec.md
+│   └── v0-plan.md                      # this file
+├── README.md
+├── LICENSE
+└── .gitignore
 ```
 
 ## Verifiable checkpoints
@@ -216,7 +237,8 @@ The work between A and B is SWE-bench-specific (task image pull, patch applicati
 | Snapshot / fork / replay | Trajectory schema already accommodates them; pure-addition later |
 | Watcher component | Apiserver's Edge registry is already observable; Watcher can read it |
 | EROFS / 3FS layered image loading | Scale optimization mismatched with v0 |
-| gRPC transport | HTTP+JSON sufficient at v0 scale; easier to debug |
+| gRPC / custom binary RPC | HTTP+JSON sufficient at v0 scale; easier to debug |
+| Rust SDK (PyO3 bindings) | SDK is Python-only in v0; if a Rust trainer ever wants it, expose via separate Rust client crate later |
 | TLS, Secret Manager | Intra-VPC + shared token is acceptable for v0 threat model |
 | Persistent Apiserver state | Rebuild from Edges on restart |
 | Trainer adapter (verl / slime) | SDK is designed for trainers as first-class consumers, but no adapter ships in v0 |
