@@ -1,0 +1,58 @@
+#!/bin/bash
+# Apiserver VM startup script.
+# Runs on every boot, but the install/build step is gated by a marker file.
+set -euxo pipefail
+
+INSTALL_MARKER=/var/arlee/installed
+mkdir -p /var/arlee /etc/arlee /opt
+
+if [ ! -f "$INSTALL_MARKER" ]; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        git curl ca-certificates build-essential pkg-config libssl-dev
+
+    # Install rustup + stable toolchain as root (used for the build only).
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --default-toolchain stable --profile minimal
+    source "$HOME/.cargo/env"
+
+    # Clone source and build release binaries.
+    git clone --depth 1 --branch '${git_ref}' '${git_repo}' /opt/arlee
+    cd /opt/arlee
+    cargo build --release -p arlee-apiserver
+    install -m 0755 target/release/arlee-apiserver /usr/local/bin/arlee-apiserver
+
+    touch "$INSTALL_MARKER"
+fi
+
+# Always (re)write env file and unit, so re-deploys can rotate the token.
+cat > /etc/arlee/apiserver.env <<EOF
+ARLEE_TOKEN=${arlee_token}
+ARLEE_APISERVER_HOST=0.0.0.0
+ARLEE_APISERVER_PORT=8080
+RUST_LOG=info
+EOF
+chmod 0640 /etc/arlee/apiserver.env
+
+cat > /etc/systemd/system/arlee-apiserver.service <<'EOF'
+[Unit]
+Description=Arlee Apiserver
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/arlee/apiserver.env
+ExecStart=/usr/local/bin/arlee-apiserver
+Restart=always
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable arlee-apiserver.service
+systemctl restart arlee-apiserver.service

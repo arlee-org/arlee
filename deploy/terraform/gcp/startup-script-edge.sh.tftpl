@@ -1,0 +1,68 @@
+#!/bin/bash
+# Edge VM startup script.
+# Installs Docker + builds the Rust edge binary, then registers with the Apiserver.
+set -euxo pipefail
+
+INSTALL_MARKER=/var/arlee/installed
+mkdir -p /var/arlee /var/arlee/trajectories /etc/arlee /opt
+
+if [ ! -f "$INSTALL_MARKER" ]; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        git curl ca-certificates build-essential pkg-config libssl-dev \
+        docker.io
+
+    systemctl enable --now docker
+
+    # Install rustup + stable toolchain as root (used for the build only).
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --default-toolchain stable --profile minimal
+    source "$HOME/.cargo/env"
+
+    git clone --depth 1 --branch '${git_ref}' '${git_repo}' /opt/arlee
+    cd /opt/arlee
+    cargo build --release -p arlee-edge
+    install -m 0755 target/release/arlee-edge /usr/local/bin/arlee-edge
+
+    touch "$INSTALL_MARKER"
+fi
+
+# Discover this VM's primary internal IP for the public_url advertised to Apiserver.
+EDGE_IP=$(curl -fsSL -H "Metadata-Flavor: Google" \
+    http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip)
+
+cat > /etc/arlee/edge.env <<EOF
+ARLEE_TOKEN=${arlee_token}
+ARLEE_APISERVER=${apiserver_url}
+ARLEE_EDGE_HOST=0.0.0.0
+ARLEE_EDGE_PORT=8081
+ARLEE_EDGE_PUBLIC_URL=http://$EDGE_IP:8081
+ARLEE_EDGE_ID=arlee-edge-${edge_index}
+ARLEE_TRAJECTORY_DIR=/var/arlee/trajectories
+RUST_LOG=info
+EOF
+chmod 0640 /etc/arlee/edge.env
+
+cat > /etc/systemd/system/arlee-edge.service <<'EOF'
+[Unit]
+Description=Arlee Edge
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/arlee/edge.env
+ExecStart=/usr/local/bin/arlee-edge
+Restart=always
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable arlee-edge.service
+systemctl restart arlee-edge.service
