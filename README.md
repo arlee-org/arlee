@@ -2,10 +2,10 @@
 
 **A**gentic **R**L **E**xecution **E**nvironment
 
-> **Status:** v0 shipped (2026-05-24). Acceptance — 3 SWE-bench Verified gold
-> patches resolved across 2 GCP Edge VMs — met. Beyond v0, most items in the
-> "Roadmap" section are still future work; see [docs/v0-plan.md](docs/v0-plan.md)
-> for the precise scope and validation record.
+> **Status:** Source available, runs end-to-end on GCP, validated against
+> SWE-bench Verified gold patches. Most items in the "Roadmap" section below
+> are still future work. The initial design + first-cut validation record is
+> archived at [docs/archive/v0-plan.md](docs/archive/v0-plan.md).
 
 ## What Arlee Is
 
@@ -38,7 +38,7 @@ The three words in the name each carve out part of the scope:
 
 Arlee draws directly on the interface design of **DeepSeek Elastic Compute (DSec)** described in the [DeepSeek V4 report](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/blob/main/DeepSeek_V4.pdf) — in particular, the idea of a single SDK abstracting multiple execution substrates (function call / container / microVM / fullVM) behind a unified command-execution, file-transfer, and TTY surface, plus globally ordered per-sandbox trajectory logs that enable replay and preemption-safe resumption. Arlee aims to be a community implementation of that interface shape; it will not attempt DSec-level optimizations on day one.
 
-## What's in v0
+## What's built
 
 ### Architecture
 
@@ -55,18 +55,23 @@ Auth between every component is a single shared token in the `X-Arlee-Token` hea
 
 ### Interfaces
 
-**Python SDK** — what RL trainers / eval harnesses call into:
+**Python SDK** — what RL trainers / eval harnesses call into. Module-level
+entry + sandbox-as-object + async-context auto-cleanup:
 
 ```python
 import arlee
+# ARLEE_APISERVER + ARLEE_TOKEN from env, or arlee.configure(apiserver=..., token=...)
 
-async with arlee.Client(apiserver=..., token=...) as c:
-    sb = await c.create_sandbox(image="ubuntu:22.04", substrate="container")
-    res = await c.exec(sb.id, "echo hello")
-    await c.write_file(sb.id, "/tmp/patch.diff", patch_bytes)
-    traj = await c.get_trajectory(sb.id)
-    await c.kill_sandbox(sb.id)
+async with await arlee.create_sandbox(image="ubuntu:22.04") as sb:
+    res = await sb.exec("pytest tests/", cwd="/testbed", env={"FOO": "bar"})
+    await sb.write_file("/tmp/patch.diff", patch_bytes)
+    await sb.upload_file("./local.py", "/remote/local.py")
+    contents = await sb.read_file("/tmp/output")
+    trajectory = await sb.get_trajectory()
+# sb.kill() runs on context exit
 ```
+
+For multi-cluster / explicit lifecycle control, `arlee.Client(apiserver=..., token=...)` is still exposed; `client.create_sandbox(...)` returns the same `Sandbox` handle.
 
 **HTTP API** — language-agnostic surface the SDK targets:
 
@@ -74,7 +79,7 @@ async with arlee.Client(apiserver=..., token=...) as c:
 |---|---|
 | `POST /sandboxes` | create |
 | `DELETE /sandboxes/{id}` | kill |
-| `POST /sandboxes/{id}/exec` | run a command |
+| `POST /sandboxes/{id}/exec` | run a command (`cwd`, `env`, `user`, `timeout` all optional) |
 | `GET / PUT /sandboxes/{id}/file?path=...` | binary-safe file read/write |
 | `GET /sandboxes/{id}/trajectory` | JSONL trajectory |
 | `GET /sandboxes` / `GET /edges` / `GET /capacity` | introspection |
@@ -95,7 +100,7 @@ eval "$(terraform output -raw env_setup)"      # exports ARLEE_APISERVER + ARLEE
 arlee health                                    # both edges should be healthy
 ```
 
-To run the v0 demo (3 SWE-bench gold patches, no LLM):
+To run the SWE-bench demo (3 gold patches, no LLM — serves as an infra regression test):
 
 ```bash
 gcloud compute ssh arlee-apiserver --zone=us-central1-a --tunnel-through-iap --project=$PROJECT_ID
@@ -112,9 +117,11 @@ sudo /opt/arlee-venv/bin/python /opt/arlee/examples/swebench_runner.py --gold
 - **Verifier / reward execution** — first-class place to run graders, unit tests, and reward functions next to the rollout.
 - **Scheduler integration** — drop-in workers for K8s / Slurm / Ray, with backpressure-aware queues.
 
-## Engineering Concerns We Care About
+## Design considerations
 
-| Area | Concerns |
+Ongoing areas we're paying attention to as the system grows beyond what's currently shipped:
+
+| Area | What we're tracking |
 |---|---|
 | **Reliability** | Sync vs async RPC, transport (HTTP/2, Thrift), retry & isolation semantics |
 | **Scalability** | K8s object / scheduler limits, horizontal scaling of the control plane |
@@ -125,8 +132,8 @@ sudo /opt/arlee-venv/bin/python /opt/arlee/examples/swebench_runner.py --gold
 
 ## Roadmap (Sketch)
 
-1. ✅ Unified SDK surface and a container-backed reference implementation (v0)
-2. Trajectory log format + replay / fast-forward (schema shipped in v0; replay deferred)
+1. ✅ Unified SDK surface and a container-backed reference implementation
+2. Trajectory log format + replay / fast-forward (schema in place; replay not yet implemented)
 3. Snapshot / fork primitives
 4. microVM backend (Firecracker)
 5. Trainer-side integration adapters (rollout workers, verifier hooks)

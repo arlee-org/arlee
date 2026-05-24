@@ -97,7 +97,14 @@ async fn exec_in_sandbox(
 ) -> Result<Json<arlee_models::ExecResult>, AppError> {
     let r = state
         .runner
-        .exec(&id, &req.command, req.timeout)
+        .exec(
+            &id,
+            &req.command,
+            req.cwd.as_deref(),
+            &req.env,
+            req.user.as_deref(),
+            req.timeout,
+        )
         .await
         .map_err(map_runner_err)?;
     Ok(Json(r))

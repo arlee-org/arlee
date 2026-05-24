@@ -1,6 +1,6 @@
-# Deploying Arlee v0 to GCP
+# Deploying Arlee to GCP
 
-The Terraform module in `terraform/gcp/` provisions an Arlee v0 cluster into a
+The Terraform module in `terraform/gcp/` provisions an Arlee cluster into a
 single GCP project: 1 Apiserver VM + N Edge VMs (default N=2), in one VPC.
 
 > **What this module is — and isn't.** This is the *deliverable* IaC: it

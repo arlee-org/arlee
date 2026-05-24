@@ -51,6 +51,12 @@ fn default_substrate() -> Substrate {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecRequest {
     pub command: String,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    #[serde(default)]
+    pub user: Option<String>,
     pub timeout: Option<f64>,
 }
 

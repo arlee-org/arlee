@@ -200,18 +200,29 @@ impl DockerRunner {
         &self,
         sandbox_id: &str,
         command: &str,
+        cwd: Option<&str>,
+        env: &HashMap<String, String>,
+        user: Option<&str>,
         timeout: Option<f64>,
     ) -> Result<ExecResult> {
         let sb = self.require(sandbox_id).await?;
         let _guard = sb.exec_lock.lock().await;
-        let result = self.exec_once(&sb.container_id, command, timeout).await?;
+        let result = self
+            .exec_once(&sb.container_id, command, cwd, env, user, timeout)
+            .await?;
         let result_json = serde_json::to_value(&result)?;
+        let mut args = serde_json::json!({"command": command, "timeout": timeout});
+        if let Some(c) = cwd {
+            args["cwd"] = serde_json::Value::String(c.to_string());
+        }
+        if !env.is_empty() {
+            args["env"] = serde_json::to_value(env)?;
+        }
+        if let Some(u) = user {
+            args["user"] = serde_json::Value::String(u.to_string());
+        }
         sb.trajectory
-            .append(
-                CommandType::Exec,
-                serde_json::json!({"command": command, "timeout": timeout}),
-                result_json,
-            )
+            .append(CommandType::Exec, args, result_json)
             .await?;
         Ok(result)
     }
@@ -305,8 +316,16 @@ impl DockerRunner {
         &self,
         container_id: &str,
         command: &str,
+        cwd: Option<&str>,
+        env: &HashMap<String, String>,
+        user: Option<&str>,
         timeout: Option<f64>,
     ) -> Result<ExecResult> {
+        let env_vec: Option<Vec<String>> = if env.is_empty() {
+            None
+        } else {
+            Some(env.iter().map(|(k, v)| format!("{k}={v}")).collect())
+        };
         let exec = self
             .docker
             .create_exec(
@@ -320,6 +339,9 @@ impl DockerRunner {
                     attach_stdout: Some(true),
                     attach_stderr: Some(true),
                     tty: Some(false),
+                    working_dir: cwd.map(|s| s.to_string()),
+                    env: env_vec,
+                    user: user.map(|s| s.to_string()),
                     ..Default::default()
                 },
             )

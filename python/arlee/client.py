@@ -1,4 +1,10 @@
-"""Arlee Python SDK — async HTTP client against Apiserver."""
+"""Arlee Python SDK — async HTTP client against Apiserver.
+
+`Client` holds the httpx connection pool + auth token; per-sandbox operations
+are reached through the `Sandbox` handle returned by `create_sandbox`. Most
+users go through the module-level helpers (`arlee.create_sandbox(...)`) and
+never construct Client explicitly.
+"""
 
 from __future__ import annotations
 
@@ -17,10 +23,11 @@ from arlee.models import (
     Substrate,
     TrajectoryEntry,
 )
+from arlee.sandbox import Sandbox
 
 
 class Client:
-    def __init__(self, apiserver: str, token: str, timeout: float = 30.0):
+    def __init__(self, apiserver: str, token: str, timeout: float = 300.0):
         self._http = httpx.AsyncClient(
             base_url=apiserver.rstrip("/"),
             headers={"X-Arlee-Token": token},
@@ -52,7 +59,7 @@ class Client:
         await self._http.aclose()
 
     # ------------------------------------------------------------------
-    # Sandbox lifecycle
+    # Public surface: sandbox factory + cluster introspection
     # ------------------------------------------------------------------
 
     async def create_sandbox(
@@ -61,7 +68,7 @@ class Client:
         substrate: Substrate | str = Substrate.CONTAINER,
         env: dict[str, str] | None = None,
         timeout: float | None = None,
-    ) -> SandboxInfo:
+    ) -> Sandbox:
         body = CreateSandboxRequest(
             image=image,
             substrate=Substrate(substrate),
@@ -70,56 +77,8 @@ class Client:
         )
         r = await self._http.post("/sandboxes", json=body.model_dump(mode="json"))
         r.raise_for_status()
-        return SandboxInfo.model_validate(r.json())
-
-    async def kill_sandbox(self, sandbox_id: str) -> None:
-        r = await self._http.delete(f"/sandboxes/{sandbox_id}")
-        r.raise_for_status()
-
-    # ------------------------------------------------------------------
-    # Sandbox operations
-    # ------------------------------------------------------------------
-
-    async def exec(
-        self,
-        sandbox_id: str,
-        command: str,
-        timeout: float | None = None,
-    ) -> ExecResult:
-        body = ExecRequest(command=command, timeout=timeout)
-        r = await self._http.post(
-            f"/sandboxes/{sandbox_id}/exec",
-            json=body.model_dump(mode="json"),
-            timeout=timeout + 10 if timeout else 300.0,
-        )
-        r.raise_for_status()
-        return ExecResult.model_validate(r.json())
-
-    async def read_file(self, sandbox_id: str, path: str) -> bytes:
-        r = await self._http.get(
-            f"/sandboxes/{sandbox_id}/file",
-            params={"path": path},
-        )
-        r.raise_for_status()
-        return r.content
-
-    async def write_file(self, sandbox_id: str, path: str, content: bytes) -> None:
-        r = await self._http.put(
-            f"/sandboxes/{sandbox_id}/file",
-            params={"path": path},
-            content=content,
-            headers={"Content-Type": "application/octet-stream"},
-        )
-        r.raise_for_status()
-
-    async def get_trajectory(self, sandbox_id: str) -> list[TrajectoryEntry]:
-        r = await self._http.get(f"/sandboxes/{sandbox_id}/trajectory")
-        r.raise_for_status()
-        return [TrajectoryEntry.model_validate(e) for e in r.json()]
-
-    # ------------------------------------------------------------------
-    # Listings
-    # ------------------------------------------------------------------
+        info = SandboxInfo.model_validate(r.json())
+        return Sandbox(info, self)
 
     async def list_sandboxes(self) -> list[SandboxInfo]:
         r = await self._http.get("/sandboxes")
@@ -140,3 +99,53 @@ class Client:
         r = await self._http.get("/health")
         r.raise_for_status()
         return r.json()
+
+    # ------------------------------------------------------------------
+    # Internal: per-sandbox operations called by Sandbox.* methods.
+    # ------------------------------------------------------------------
+
+    async def _exec(
+        self,
+        sandbox_id: str,
+        command: str,
+        *,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+        user: str | None = None,
+        timeout: float | None = None,
+    ) -> ExecResult:
+        body = ExecRequest(
+            command=command, cwd=cwd, env=env or {}, user=user, timeout=timeout
+        )
+        r = await self._http.post(
+            f"/sandboxes/{sandbox_id}/exec",
+            json=body.model_dump(mode="json"),
+            timeout=timeout + 30 if timeout else None,
+        )
+        r.raise_for_status()
+        return ExecResult.model_validate(r.json())
+
+    async def _read_file(self, sandbox_id: str, path: str) -> bytes:
+        r = await self._http.get(
+            f"/sandboxes/{sandbox_id}/file", params={"path": path}
+        )
+        r.raise_for_status()
+        return r.content
+
+    async def _write_file(self, sandbox_id: str, path: str, content: bytes) -> None:
+        r = await self._http.put(
+            f"/sandboxes/{sandbox_id}/file",
+            params={"path": path},
+            content=content,
+            headers={"Content-Type": "application/octet-stream"},
+        )
+        r.raise_for_status()
+
+    async def _get_trajectory(self, sandbox_id: str) -> list[TrajectoryEntry]:
+        r = await self._http.get(f"/sandboxes/{sandbox_id}/trajectory")
+        r.raise_for_status()
+        return [TrajectoryEntry.model_validate(e) for e in r.json()]
+
+    async def _kill_sandbox(self, sandbox_id: str) -> None:
+        r = await self._http.delete(f"/sandboxes/{sandbox_id}")
+        r.raise_for_status()

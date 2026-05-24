@@ -40,6 +40,9 @@ class CreateSandboxRequest(BaseModel):
 
 class ExecRequest(BaseModel):
     command: str
+    cwd: str | None = None
+    env: dict[str, str] = Field(default_factory=dict)
+    user: str | None = None
     timeout: float | None = None
 
 

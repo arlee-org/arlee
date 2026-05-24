@@ -62,8 +62,19 @@ Three runtime components, all in cloud. The only thing on the developer's laptop
 
 ### Python SDK (`python/arlee/`)
 
-- `httpx` async client. Each method maps 1:1 to an Apiserver endpoint.
-- `create_sandbox(image=..., substrate="container", env=..., timeout=...)` — `substrate` parameter is exposed on day 1 with `"container"` as the only valid value. This keeps the API forward-compatible when microVM / fullVM substrates land later.
+- `httpx` async client. Three files: `models.py` (pydantic wire types), `client.py` (Client class + connection pool + raw HTTP calls), `sandbox.py` (Sandbox handle class with per-sandbox methods).
+- **Primary API: module-level + Sandbox-as-object.**
+  ```python
+  async with await arlee.create_sandbox(image=...) as sb:
+      await sb.exec("cmd", cwd=..., env=..., user=..., timeout=...)
+      await sb.write_file("/p", b"...")        # in-memory bytes
+      await sb.upload_file("local.txt", "/remote.txt")  # local-path streaming
+      traj = await sb.get_trajectory()
+  # sb.kill() on context exit
+  ```
+- `arlee.Client` is exposed for advanced/multi-cluster use; `create_sandbox` on either Client or the module returns a `Sandbox` handle.
+- `arlee.configure(apiserver=..., token=..., timeout=...)` overrides env vars before first SDK call.
+- `substrate="container"` is the only valid value in v0; parameter shipped on day 1 for forward compat with microVM/fullVM.
 - Consumers: `examples/`, future RL framework adapters (verl / slime / etc).
 - Distributed via PyPI as `pip install arlee` (post-v0; v0 is from-source only).
 
@@ -102,7 +113,7 @@ Outputs: `apiserver_ip`, `edge_ips`, `token` (sensitive).
 |---|---|---|
 | `POST /sandboxes` | `create_sandbox` | body: `image`, `substrate`, `env`, `timeout` |
 | `DELETE /sandboxes/{id}` | `kill_sandbox` | trajectory retained 24h after kill |
-| `POST /sandboxes/{id}/exec` | `exec` | body: `command`, `timeout`; returns `exit_code`, `stdout`, `stderr` |
+| `POST /sandboxes/{id}/exec` | `sb.exec` | body: `command`, `cwd?`, `env?`, `user?`, `timeout?`; returns `exit_code`, `stdout`, `stderr` |
 | `GET /sandboxes/{id}/file?path=...` | `read_file` | binary-safe; path passed as query param to avoid URL-encoding pain |
 | `PUT /sandboxes/{id}/file?path=...` | `write_file` | binary body; same path-as-query convention |
 | `GET /sandboxes/{id}/trajectory` | `get_trajectory` | returns JSON array of entries |
