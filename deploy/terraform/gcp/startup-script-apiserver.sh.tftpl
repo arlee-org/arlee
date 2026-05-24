@@ -21,6 +21,10 @@ if [ ! -f "$INSTALL_MARKER" ]; then
 
     # Source clone for python SDK + examples/ (small, no cargo build).
     git clone --depth 1 --branch '${git_ref}' '${git_repo}' /opt/arlee
+    # /opt/arlee is owned by root (we cloned as root); mark it system-wide
+    # safe so SSHing in as a non-root user and running `git ...` doesn't trip
+    # git's "dubious ownership" check.
+    git config --system --add safe.directory /opt/arlee
 
     # Python venv with the SDK + swebench harness (for examples/swebench_runner.py).
     python3 -m venv /opt/arlee-venv

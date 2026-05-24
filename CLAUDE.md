@@ -97,6 +97,9 @@ Same on each `arlee-edge-N` VM with `/usr/local/bin/arlee-edge`.
 - **Scheduler is optimistic-reservation least-loaded.** `pick_least_loaded` atomically picks + increments `sandbox_count`; failure paths must call `release_reservation`. Don't bypass this if you change the create_sandbox flow.
 - **Don't bypass Apiserver to talk to Edges directly during dev.** Sandboxes created via direct-curl-to-Edge become invisible to Apiserver — they show up in Edge's `sandbox_count` heartbeat (skewing scheduling) but aren't killable via the Apiserver API. This bit us once during validation.
 - **`gcloud compute ssh` first-connect** takes ~10s to provision the user. Patience, don't retry-loop.
+- **`git` on `/opt/arlee` from the SSH user trips "dubious ownership"** because cloud-init clones it as root (uid 0) but you SSH in as a non-root user. The startup-script applies `git config --system --add safe.directory /opt/arlee` as a preemptive fix, so this only bites you on VMs provisioned before that fix landed; if so, run the same command once as root (it persists on disk) and you're good.
+- **You can't `curl -o /usr/local/bin/<binary>` over a running binary** — ETXTBSY ("Failure writing output to destination"). Download to `/tmp/foo.new`, `mv` it into place (mv changes inode; the running process keeps the old one until restart).
+- **Multi-account git identity:** if you maintain multiple GitHub identities, the safest way to keep them isolated for this repo is `git config --local user.name / user.email / user.signingkey` so the local file wins regardless of any `includeIf` or global config drift.
 
 ## Where to look first
 
