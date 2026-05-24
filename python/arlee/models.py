@@ -38,12 +38,12 @@ class OnOom(str, Enum):
     """What the kernel kills when this sandbox hits its memory ceiling.
 
     KILL_PROCESS (default): cgroup `memory.oom.group=0`. Kernel kills
-    individual processes; sandbox PID 1 survives. Suits training /
-    long-lived workspaces.
+    individual processes; sandbox PID 1 survives so subsequent execs
+    against the same sandbox still work.
 
     KILL_SANDBOX: cgroup `memory.oom.group=1`. Kernel atomically SIGKILLs
-    every process in the cgroup; sandbox transitions to Failed. Suits
-    eval / throw-away workloads.
+    every process in the cgroup; sandbox transitions to Failed and
+    subsequent operations error out.
     """
 
     KILL_PROCESS = "kill_process"

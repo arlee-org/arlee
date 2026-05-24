@@ -209,12 +209,12 @@ The atomic pick-and-reserve pattern from today is preserved: `pick_least_loaded`
 | `kill_process` (default) | `memory.oom.group=0` | Kernel kills individual processes. Sandbox PID 1 (`sleep infinity`) survives. Sandbox stays `Running`; exec returns `terminated_by=Oom`. |
 | `kill_sandbox` | `memory.oom.group=1` | Kernel kills the whole cgroup atomically. Sandbox transitions to `Failed` with `terminated_by=Oom`. All subsequent ops return 410 Gone. |
 
-Default rationale: lenient is the safer default. Training workloads need their sandbox to survive transient OOMs; eval workloads can tolerate lenient (the harness sees the failure and decides what to do). `kill_sandbox` is the explicit opt-in for "any OOM means this sandbox is unrecoverable."
+Default rationale: lenient is the safer default. With `kill_process`, the caller gets a structured failure signal (`terminated_by=oom`) and can decide whether to retry the command, abandon the sandbox, or raise the ceiling — the sandbox is still around to do any of those. `kill_sandbox` is the explicit opt-in for "any OOM means this sandbox is unrecoverable"; consumers that want a hard error boundary at every OOM rather than an exec-level signal pick this.
 
 Two caveats:
 
 1. `kill_process` does not guarantee that *only* one process is killed. The kernel may kill multiple to satisfy an allocation. Documented as "does not force atomic group-kill," not "kills exactly one process."
-2. The kernel could theoretically pick PID 1 as the victim, ending the sandbox even under `kill_process`. We push back against this by writing `oom_score_adj=-1000` on PID 1 at sandbox creation (Docker's default is less aggressive). With `sleep infinity` as PID 1, the residual probability is negligible.
+2. The kernel could theoretically pick PID 1 as the victim, ending the sandbox even under `kill_process`. We push back against this by writing `oom_score_adj=-1000` on PID 1 at sandbox creation **only when `on_oom=kill_process`** (Docker's default is less aggressive). With `sleep infinity` as PID 1, the residual probability is negligible. Under `kill_sandbox` we deliberately leave PID 1's oom_score_adj at the default — `oom_score_adj=-1000` makes the kernel skip the process even when `memory.oom.group=1` says "kill the whole cgroup", which would defeat the `kill_sandbox` semantic by keeping PID 1 alive after the rest of the cgroup is SIGKILLed.
 
 ### 5.4 Detection and reporting
 
@@ -253,7 +253,7 @@ Cost: two file reads per exec, negligible.
 
 Order of operations matters: read counters **before** `rmdir` on the cgroup. The Edge state machine for sandbox kill is: stop container → inspect for OOM → read cgroup events → rmdir.
 
-**PID 1 immunity**: with `oom_score_adj = -1000` written on PID 1 at sandbox creation (§7.2), the global OOM killer treats it as immune. So in the `OomEdge` scenario, the kernel will pick some other process in the sandbox before considering PID 1 — the sandbox usually survives (returning `OomEdge` on the exec) rather than transitioning to `Failed`. `terminated_by = OomEdge` at the sandbox level is reserved for the rare case where every non-PID-1 process is gone or PID 1 itself was somehow killed.
+**PID 1 immunity** (only under `on_oom=kill_process`): we write `oom_score_adj = -1000` on PID 1 at sandbox creation (§7.2), which makes the global OOM killer treat it as immune. So in the `OomEdge` scenario, the kernel picks some other process in the sandbox before considering PID 1 — the sandbox usually survives (returning `OomEdge` on the exec) rather than transitioning to `Failed`. `terminated_by = OomEdge` at the sandbox level is reserved for the rare case where every non-PID-1 process is gone or PID 1 itself was somehow killed. Under `on_oom=kill_sandbox` we deliberately do **not** write `-1000` (see §5.3 caveat 2), so under `kill_sandbox` an Edge-pressure OOM that picks PID 1 will also end the sandbox — which is the harsher semantic the user opted into.
 
 **stderr enrichment**: described in §4.3 with both flavors.
 

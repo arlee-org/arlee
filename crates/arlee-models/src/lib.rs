@@ -57,12 +57,12 @@ pub struct ResourceSpec {
 #[serde(rename_all = "snake_case")]
 pub enum OnOom {
     /// Default. cgroup `memory.oom.group=0`: kernel kills individual processes;
-    /// sandbox PID 1 (with oom_score_adj=-1000) survives. Suits training /
-    /// long-lived workspaces.
+    /// sandbox PID 1 (with oom_score_adj=-1000) survives so subsequent execs
+    /// against the same sandbox still work.
     KillProcess,
     /// cgroup `memory.oom.group=1`: kernel atomically SIGKILLs every process
-    /// in the cgroup; sandbox transitions to Failed. Suits eval / throw-away
-    /// workloads.
+    /// in the cgroup; sandbox transitions to Failed and subsequent operations
+    /// error out.
     KillSandbox,
 }
 

@@ -11,19 +11,25 @@ mkdir -p /var/arlee /var/arlee/trajectories /etc/arlee /opt
 if [ ! -f "$INSTALL_MARKER" ]; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
-    apt-get install -y --no-install-recommends \
-        ca-certificates curl docker.io
 
     # Force Docker to the cgroupfs cgroup driver so arlee-edge can use
     # path-style --cgroup-parent=/arlee/<sid> for hard memory.min
     # reservations. Modern Docker defaults to systemd driver; we override.
     # See docs/design/memory-limits.md §7.2.
+    #
+    # IMPORTANT: this must be written BEFORE `apt-get install docker.io`,
+    # because the package's postinst auto-starts dockerd. If daemon.json
+    # isn't in place at that moment, dockerd starts with the default
+    # (systemd) driver and a subsequent restart is required.
     mkdir -p /etc/docker
     cat > /etc/docker/daemon.json <<'JSON'
 {
   "exec-opts": ["native.cgroupdriver=cgroupfs"]
 }
 JSON
+
+    apt-get install -y --no-install-recommends \
+        ca-certificates curl docker.io
     systemctl enable --now docker
 
     # Pre-built edge binary.

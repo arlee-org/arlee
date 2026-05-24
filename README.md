@@ -66,7 +66,7 @@ async with await arlee.create_sandbox(
     image="ubuntu:22.04",
     memory_min_mb=1024,         # guaranteed floor (cgroup memory.min)
     memory_max_mb=3072,         # hard ceiling (cgroup memory.max)
-    on_oom="kill_process",      # default; or "kill_sandbox" for eval
+    on_oom="kill_process",      # default; or "kill_sandbox"
 ) as sb:
     res = await sb.exec("pytest tests/", cwd="/testbed", env={"FOO": "bar"})
     if res.terminated_by == "oom":

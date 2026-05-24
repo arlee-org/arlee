@@ -315,17 +315,23 @@ impl SubstrateRuntime for DockerSubstrate {
             return Err(anyhow::Error::from(e).context("start_container"));
         }
 
-        // Pin PID 1 (`sleep infinity`) against the global OOM killer so the
-        // sandbox survives Edge-pressure OOM events under
-        // on_oom=KillProcess. See docs/design/memory-limits.md §5.3.
-        if let Ok(inspect) = self.docker.inspect_container(&created.id, None).await {
-            if let Some(pid) = inspect.state.as_ref().and_then(|s| s.pid).filter(|p| *p > 0) {
-                if let Err(e) = write_oom_score_adj(pid as i64, -1000) {
-                    warn!(
-                        sandbox_id = %sandbox_id,
-                        "could not set oom_score_adj=-1000 on PID 1 ({e}); \
-                         sandbox PID 1 is exposed to global OOM killer"
-                    );
+        // Under on_oom=KillProcess we pin PID 1 against the OOM killer so
+        // the sandbox survives Edge-pressure OOM events; under
+        // on_oom=KillSandbox we must NOT pin PID 1, because oom_score_adj
+        // =-1000 makes the kernel skip the process even when
+        // memory.oom.group=1 says "kill all processes in the cgroup" —
+        // PID 1 would survive and the sandbox stays running, defeating
+        // the kill_sandbox semantic. See docs/design/memory-limits.md §5.3.
+        if req.on_oom == OnOom::KillProcess {
+            if let Ok(inspect) = self.docker.inspect_container(&created.id, None).await {
+                if let Some(pid) = inspect.state.as_ref().and_then(|s| s.pid).filter(|p| *p > 0) {
+                    if let Err(e) = write_oom_score_adj(pid as i64, -1000) {
+                        warn!(
+                            sandbox_id = %sandbox_id,
+                            "could not set oom_score_adj=-1000 on PID 1 ({e}); \
+                             sandbox PID 1 is exposed to global OOM killer"
+                        );
+                    }
                 }
             }
         }
