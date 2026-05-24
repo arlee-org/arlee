@@ -1,7 +1,6 @@
 variable "project_id" {
-  description = "GCP project ID"
+  description = "GCP project ID to deploy into. No default — must be supplied via tfvars or -var so we never accidentally target someone else's project."
   type        = string
-  default     = "arlee-497222"
 }
 
 variable "region" {

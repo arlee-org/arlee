@@ -1,15 +1,17 @@
 # Copy to terraform.tfvars and fill in. terraform.tfvars is .gitignored.
 
-project_id       = "arlee-497222"
+# Your GCP project to deploy into.
+project_id       = "your-gcp-project-id"
+
 region           = "us-central1"
 zone             = "us-central1-a"
 edge_count       = 2
 
-# Required: your public IP (where you run `arlee` from), in CIDR form.
+# Your public IP (where you run `arlee` from), in CIDR form.
 # Find it with: curl -s https://ifconfig.me
 # Example: operator_ip_cidr = "203.0.113.42/32"
 operator_ip_cidr = "REPLACE/32"
 
-# If you fork the repo, change this so the VMs clone the right place.
+# If you fork the repo, change this so the VMs pull source from your fork.
 git_repo = "https://github.com/arlee-org/arlee.git"
 git_ref  = "main"

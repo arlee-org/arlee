@@ -3,26 +3,38 @@
 The Terraform module in `terraform/gcp/` provisions an Arlee v0 cluster into a
 single GCP project: 1 Apiserver VM + N Edge VMs (default N=2), in one VPC.
 
+> **What this module is — and isn't.** This is the *deliverable* IaC: it
+> deploys Arlee into **your** GCP project. It has no hardcoded defaults
+> that target ours. Defaults that aren't safely neutral (e.g. `project_id`)
+> are required variables; you must supply them via `terraform.tfvars` or
+> `-var`. Anything in `terraform.tfvars` is gitignored.
+
 ## Prerequisites
 
-- `gcloud` authenticated to the target project (`gcloud auth application-default login`).
-- A GCP project with billing enabled (default in `variables.tf`: `arlee-497222`).
-- The Compute Engine API enabled:
+- A GCP project of your own, with billing enabled. Pick its ID; the rest of
+  this guide refers to it as `$PROJECT_ID`.
+- `gcloud` authenticated against that project:
+  ```bash
+  gcloud auth application-default login
   ```
-  gcloud services enable compute.googleapis.com --project=arlee-497222
+- The Compute Engine API enabled on it:
+  ```bash
+  gcloud services enable compute.googleapis.com --project=$PROJECT_ID
   ```
 - `terraform >= 1.6`.
-- The repo pushed to the Git URL configured in `git_repo` (default
-  `https://github.com/arlee-org/arlee.git`, `main` branch). The VMs clone this
-  on first boot and run `cargo build --release`.
+- The Arlee repo accessible at the URL given by `var.git_repo` (default
+  `https://github.com/arlee-org/arlee.git`, `main` branch). The VMs clone
+  it on first boot and run `cargo build --release`. If you forked the
+  repo, override `git_repo` to point at your fork.
 
 ## 5-minute deploy
 
 ```bash
 cd deploy/terraform/gcp
 cp terraform.tfvars.example terraform.tfvars
-# Edit terraform.tfvars: at minimum set operator_ip_cidr to your /32.
-#   curl -s https://ifconfig.me     ← your public IP
+# Edit terraform.tfvars:
+#   - project_id      = "$PROJECT_ID"          (your GCP project)
+#   - operator_ip_cidr = "$(curl -s ifconfig.me)/32"
 
 terraform init
 terraform apply
@@ -49,15 +61,12 @@ arlee edges   # both Edges should show healthy=✓
 ```bash
 # SSH into the Apiserver VM (workload runs there, not on your laptop).
 gcloud compute ssh arlee-apiserver \
-    --zone=us-central1-a --project=arlee-497222 --tunnel-through-iap
+    --zone=us-central1-a --project=$PROJECT_ID --tunnel-through-iap
 
 # On the VM — runner uses the venv that the startup-script set up at
 # /opt/arlee-venv, which has the SDK and `swebench` package pre-installed.
-sudo /opt/arlee-venv/bin/python /opt/arlee/examples/swebench_runner.py --gold \
-    --instance-id marshmallow-code__marshmallow-1359 \
-    --instance-id sqlfluff__sqlfluff-1517 \
-    --instance-id pvlib__pvlib-python-1072
-# expect: 3/3 PASS
+sudo /opt/arlee-venv/bin/python /opt/arlee/examples/swebench_runner.py --gold
+# expect: 3/3 RESOLVED
 ```
 
 The runner needs `ARLEE_APISERVER` and `ARLEE_TOKEN` in its environment.
@@ -94,14 +103,14 @@ terraform destroy
 
 ```bash
 # Apiserver logs
-gcloud compute ssh arlee-apiserver --zone=us-central1-a --project=arlee-497222 \
+gcloud compute ssh arlee-apiserver --zone=us-central1-a --project=$PROJECT_ID \
     --command='sudo journalctl -u arlee-apiserver -f'
 
 # Edge logs
-gcloud compute ssh arlee-edge-1 --zone=us-central1-a --project=arlee-497222 \
+gcloud compute ssh arlee-edge-1 --zone=us-central1-a --project=$PROJECT_ID \
     --command='sudo journalctl -u arlee-edge -f'
 
 # First-boot script output (where build failures show up)
-gcloud compute ssh arlee-edge-1 --zone=us-central1-a --project=arlee-497222 \
+gcloud compute ssh arlee-edge-1 --zone=us-central1-a --project=$PROJECT_ID \
     --command='sudo cat /var/log/syslog | grep startup-script'
 ```
