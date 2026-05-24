@@ -48,6 +48,11 @@ pub struct State {
 struct Inner {
     edges: HashMap<String, EdgeRecord>,
     sandbox_to_edge: HashMap<String, String>,
+    /// Per-sandbox memory_min_mb the apiserver reserved at pick time. Needed
+    /// so `forget_sandbox` can decrement the Edge's reserved_memory_mb by the
+    /// right amount; without this the apiserver's view drifts upward each
+    /// time a sandbox is killed.
+    sandbox_min_mb: HashMap<String, u32>,
 }
 
 impl State {
@@ -57,6 +62,7 @@ impl State {
             inner: RwLock::new(Inner {
                 edges: HashMap::new(),
                 sandbox_to_edge: HashMap::new(),
+                sandbox_min_mb: HashMap::new(),
             }),
         }
     }
@@ -98,7 +104,16 @@ impl State {
         if let Some(edge) = inner.edges.get_mut(edge_id) {
             edge.last_seen = Utc::now();
             edge.sandbox_count = sandbox_count;
-            edge.reserved_memory_mb = reserved_memory_mb;
+            // Take max(apiserver_value, edge_reported). Apiserver's value can
+            // be temporarily higher than the Edge's because of the
+            // pick-then-forward race: pick_with_memory increments
+            // optimistically; an Edge heartbeat that fires before the Edge
+            // has processed the forwarded create reports the pre-create
+            // value, which would otherwise clobber our optimistic count. The
+            // forget_sandbox path is the only authoritative way to decrement
+            // — heartbeat is allowed to raise above (drift catch) but never
+            // lower.
+            edge.reserved_memory_mb = std::cmp::max(edge.reserved_memory_mb, reserved_memory_mb);
             true
         } else {
             false
@@ -210,9 +225,10 @@ impl State {
         }
     }
 
-    pub async fn record_sandbox(&self, sandbox_id: String, edge_id: &str) {
+    pub async fn record_sandbox(&self, sandbox_id: String, edge_id: &str, memory_min_mb: u32) {
         let mut inner = self.inner.write().await;
         inner.sandbox_to_edge.insert(sandbox_id.clone(), edge_id.to_string());
+        inner.sandbox_min_mb.insert(sandbox_id.clone(), memory_min_mb);
         if let Some(edge) = inner.edges.get_mut(edge_id) {
             edge.sandboxes.insert(sandbox_id);
         }
@@ -220,9 +236,16 @@ impl State {
 
     pub async fn forget_sandbox(&self, sandbox_id: &str) {
         let mut inner = self.inner.write().await;
+        let min_mb = inner.sandbox_min_mb.remove(sandbox_id).unwrap_or(0);
         if let Some(edge_id) = inner.sandbox_to_edge.remove(sandbox_id) {
             if let Some(edge) = inner.edges.get_mut(&edge_id) {
                 edge.sandboxes.remove(sandbox_id);
+                // Decrement reserved_memory_mb — heartbeat takes max() so it
+                // would otherwise stay at the pre-kill level until the Edge
+                // catches up. sandbox_count is intentionally NOT decremented
+                // here: the heartbeat overwrites it from the Edge's
+                // authoritative view, so doing both would race.
+                edge.reserved_memory_mb = edge.reserved_memory_mb.saturating_sub(min_mb);
             }
         }
     }

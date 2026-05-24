@@ -97,7 +97,8 @@ async fn register_edge(
         Ok(r) if r.status().is_success() => {
             if let Ok(items) = r.json::<Vec<SandboxInfo>>().await {
                 for sb in items {
-                    s.state.record_sandbox(sb.id, &req.edge_id).await;
+                    let min = sb.resources.memory_min_mb.unwrap_or(0);
+                    s.state.record_sandbox(sb.id, &req.edge_id, min).await;
                 }
             }
         }
@@ -241,7 +242,9 @@ async fn create_sandbox(
             return Err(AppError::BadGateway(format!("decode: {e}")));
         }
     };
-    s.state.record_sandbox(info.id.clone(), &edge.edge_id).await;
+    s.state
+        .record_sandbox(info.id.clone(), &edge.edge_id, request_min_mb)
+        .await;
     Ok(Json(info))
 }
 
