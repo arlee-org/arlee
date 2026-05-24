@@ -6,7 +6,7 @@ Integration tests against a live Arlee cluster are tagged with the
 no failure, just skipped tests. To exercise them: `terraform apply`,
 `eval "$(terraform output -raw env_setup)"`, then `pytest -m gcp`.
 
-See docs/design/memory-limits.md §8 for the testing policy this
+See docs/memory-limits.md §5 for the testing policy this
 implements.
 """
 

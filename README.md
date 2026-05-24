@@ -1,15 +1,6 @@
 # Arlee
 
-**A**gentic **R**L **E**xecution **E**nvironment
-
-> **Status:** Source available, runs end-to-end on GCP, validated against
-> SWE-bench Verified gold patches. Most items in the "Roadmap" section below
-> are still future work. The initial design + first-cut validation record is
-> archived at [docs/archive/v0-plan.md](docs/archive/v0-plan.md).
-
-## What Arlee Is
-
-Arlee is the execution-environment layer of an agent RL system. The trainer updates the policy and the inference engine generates actions; Arlee runs those actions in isolated sandboxes and emits the observations, rewards, and trajectories the trainer learns from.
+Arlee (**A**gentic **RL** **E**xecution **E**nvironment) is the execution-environment layer of an agent RL system. The trainer updates the policy and the inference engine generates actions; Arlee runs those actions in isolated sandboxes and emits the observations, rewards, and trajectories the trainer learns from.
 
 ```
                     RL trainer  (GPU cluster)
@@ -30,7 +21,7 @@ Arlee is the execution-environment layer of an agent RL system. The trainer upda
 
 The three words in the name each carve out part of the scope:
 
-- **Agentic** — Arlee targets multi-turn, environment-interactive workloads (coding agents, computer-use, long-horizon tool use) — i.e. LLMs acting as policies in temporally extended POMDPs. *Not* aimed at single-turn, preference-based post-training (RLHF, DPO, RLAIF), where the model is a static conditional generator over a single-step MDP.
+- **Agentic** — Arlee targets multi-turn, environment-interactive workloads: coding agents, computer-use, long-horizon tool use — the model takes an action, sees what happens, and decides the next action, over many turns. *Not* aimed at single-turn, preference-based post-training (RLHF, DPO, RLAIF), where the model generates one response with no environment to act in.
 - **RL** — Arlee is purpose-built for agent RL post-training (rollout, evaluation, policy update). *Not* a production sandbox-serving product (e.g. E2B), and *not* a general-purpose browser-automation or code-interpreter tool (e.g. Playwright, Jupyter kernel-as-a-service).
 - **Execution Environment** — the *sandbox where agent actions run* — code, shell, browser / computer-use, repo edits, unit tests, simulated SaaS workflows, verifier / reward functions. Not the trainer, not the inference engine, and not the agent framework above (e.g. LangChain, AutoGen).
 
@@ -44,7 +35,7 @@ Arlee draws directly on the interface design of **DeepSeek Elastic Compute (DSec
 
 | Component | Language | Runs where | Job |
 |---|---|---|---|
-| `arlee-apiserver` | Rust (axum) | One cloud VM | HTTP API gateway, edge registry, least-loaded scheduler with optimistic reservation, forwarding proxy to Edges |
+| `arlee-apiserver` | Rust (axum) | One cloud VM | HTTP API gateway, edge registry, memory-aware spread scheduler with optimistic reservation, forwarding proxy to Edges |
 | `arlee-edge` | Rust (axum + bollard) | Each cloud VM with Docker | Per-host sandbox driver; runs containers, serializes exec per sandbox, writes JSONL trajectory |
 | `arlee` Python SDK | Python (httpx + pydantic) | Inside the consumer (eval script, RL trainer adapter, …) | Async client over the HTTP API |
 | `arlee` CLI | Rust (clap) | Operator's laptop | Thin wrapper for `terraform`, edge/sandbox/log queries |
@@ -79,7 +70,7 @@ async with await arlee.create_sandbox(
 # sb.kill() runs on context exit
 ```
 
-The apiserver schedules each sandbox onto the Edge with the most available memory headroom (spread, not pack), reserving `memory_min_mb` on that Edge as a hard cgroup-enforced floor. Memory fields are optional; omit both to inherit the current host-default (no limits, no reservation). See [docs/design/memory-limits.md](docs/design/memory-limits.md) for the full design.
+The apiserver schedules each sandbox onto the Edge with the most available memory headroom (spread, not pack), reserving `memory_min_mb` on that Edge as a hard cgroup-enforced floor. Memory fields are optional; omit both to inherit the current host-default (no limits, no reservation). See [docs/memory-limits.md](docs/memory-limits.md) for the full operational reference (and [docs/archive/memory-limits.md](docs/archive/memory-limits.md) for the original design + validation record).
 
 For multi-cluster / explicit lifecycle control, `arlee.Client(apiserver=..., token=...)` is still exposed; `client.create_sandbox(...)` returns the same `Sandbox` handle.
 

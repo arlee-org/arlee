@@ -35,7 +35,7 @@ single GCP project: 1 Apiserver VM + N Edge VMs (default N=2), in one VPC.
 
 Edge VMs need cgroup v2 + Docker's `cgroupfs` cgroup driver so per-sandbox
 memory limits are honored as hard `memory.min` / `memory.max` reservations
-(see [docs/design/memory-limits.md §7.2](../docs/design/memory-limits.md)).
+(see [docs/memory-limits.md §4.2](../docs/memory-limits.md)).
 The cloud-init in this module sets both:
 
 - The image (Ubuntu 22.04+) ships with cgroup v2 mounted at

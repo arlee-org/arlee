@@ -30,7 +30,7 @@ class CommandType(str, Enum):
 
 
 # ---------------------------------------------------------------------------
-# Memory / resource configuration (see docs/design/memory-limits.md)
+# Memory / resource configuration (see docs/memory-limits.md)
 # ---------------------------------------------------------------------------
 
 

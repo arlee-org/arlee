@@ -1,7 +1,7 @@
 //! bollard-backed sandbox lifecycle and operations.
 //!
 //! The `SubstrateRuntime` implementation for [`Substrate::Container`]. See
-//! `crate::substrate` for the trait and `docs/design/memory-limits.md` §7.1
+//! `crate::substrate` for the trait and `docs/memory-limits.md` §4.1
 //! for the rationale for introducing the trait now (only one impl today).
 
 use std::collections::HashMap;
@@ -63,7 +63,7 @@ impl DockerSubstrate {
         docker.ping().await.context("docker ping failed")?;
         let cgroup = EdgeCgroup::new().context(
             "EdgeCgroup setup failed; Edge requires cgroup v2 at /sys/fs/cgroup \
-             (see docs/design/memory-limits.md §7.2)",
+             (see docs/memory-limits.md §4.2)",
         )?;
         let total_memory_mb = detect_total_memory_mb(DEFAULT_SYSTEM_RESERVE_MB);
         Ok(Self {
@@ -246,7 +246,7 @@ impl SubstrateRuntime for DockerSubstrate {
 
         // Set up the cgroup BEFORE creating the container so memory.min/max
         // are in place when Docker creates its child scope. See
-        // docs/design/memory-limits.md §7.2.
+        // docs/memory-limits.md §4.2.
         self.cgroup
             .create(&sandbox_id, &req.resources, req.on_oom)
             .with_context(|| format!("setup cgroup for sandbox {sandbox_id}"))?;
@@ -321,7 +321,7 @@ impl SubstrateRuntime for DockerSubstrate {
         // =-1000 makes the kernel skip the process even when
         // memory.oom.group=1 says "kill all processes in the cgroup" —
         // PID 1 would survive and the sandbox stays running, defeating
-        // the kill_sandbox semantic. See docs/design/memory-limits.md §5.3.
+        // the kill_sandbox semantic. See docs/memory-limits.md §3.3.
         if req.on_oom == OnOom::KillProcess {
             if let Ok(inspect) = self.docker.inspect_container(&created.id, None).await {
                 if let Some(pid) = inspect.state.as_ref().and_then(|s| s.pid).filter(|p| *p > 0) {
@@ -423,7 +423,7 @@ impl SubstrateRuntime for DockerSubstrate {
         let sb = self.require(sandbox_id).await?;
         let _guard = sb.exec_lock.lock().await;
         // Snapshot memory.events before/after to discriminate own-max OOM
-        // from Edge-pressure OOM. See docs/design/memory-limits.md §5.4.
+        // from Edge-pressure OOM. See docs/memory-limits.md §3.4.
         let before = self
             .cgroup
             .read_memory_events(sandbox_id)

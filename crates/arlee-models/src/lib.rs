@@ -31,7 +31,7 @@ pub enum CommandType {
 }
 
 // ---------------------------------------------------------------------------
-// Memory / resource configuration (see docs/design/memory-limits.md)
+// Memory / resource configuration (see docs/memory-limits.md)
 // ---------------------------------------------------------------------------
 
 /// Per-sandbox resource configuration. All fields optional; None preserves the

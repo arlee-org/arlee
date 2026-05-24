@@ -1,6 +1,6 @@
 """End-to-end memory-limits tests against a live Arlee cluster.
 
-Implements docs/design/memory-limits.md §8 items 4–7. Auto-skips when
+Implements docs/memory-limits.md §5 items 4–7. Auto-skips when
 ARLEE_APISERVER / ARLEE_TOKEN are unset (see ../conftest.py). To run:
 
     cd deploy/terraform/gcp && terraform apply && \\
@@ -81,7 +81,7 @@ async def test_own_max_oom_kill_sandbox_transitions_to_failed(client):
 
     Validates that conditional oom_score_adj is correct: under kill_sandbox
     we deliberately leave PID 1 killable so memory.oom.group=1 takes the
-    whole cgroup down. See docs/design/memory-limits.md §5.3 caveat 2.
+    whole cgroup down. See docs/memory-limits.md §3.3 caveat 2.
     """
     sb = await client.create_sandbox(
         image=STRESS_IMAGE,

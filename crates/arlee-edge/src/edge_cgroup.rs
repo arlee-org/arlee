@@ -6,7 +6,7 @@
 //! `<root>/<parent>/<sandbox_id>/`; Docker is invoked with
 //! `--cgroup-parent=/<parent>/<sandbox_id>`.
 //!
-//! See `docs/design/memory-limits.md` §7.2 for rationale and operational
+//! See `docs/memory-limits.md` §4.2 for rationale and operational
 //! requirements (cgroup v2 mount; Docker `native.cgroupdriver=cgroupfs`).
 
 use std::collections::HashSet;
@@ -25,7 +25,7 @@ const MIB: u64 = 1024 * 1024;
 
 /// Counter snapshot read from a cgroup's `memory.events` file. The
 /// discriminator between own-max OOM and Edge-pressure OOM compares these
-/// across an exec; see `docs/design/memory-limits.md` §5.4.
+/// across an exec; see `docs/memory-limits.md` §3.4.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MemoryEvents {
     pub max: u64,
@@ -79,7 +79,7 @@ impl EdgeCgroup {
         if !root.exists() {
             bail!(
                 "cgroup v2 root {} does not exist; Arlee Edge requires cgroup v2 \
-                 mounted at this path (see docs/design/memory-limits.md §7.2)",
+                 mounted at this path (see docs/memory-limits.md §4.2)",
                 root.display()
             );
         }

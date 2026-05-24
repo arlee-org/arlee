@@ -507,3 +507,90 @@ Implementation order:
    - **[CLAUDE.md](../../CLAUDE.md)** "Known gotchas": add entries for (i) cgroup v2 requirement on Edge VMs, (ii) `OomEdge` is retriable by re-creating the sandbox, not re-execing.
    - **[examples/swebench_runner.py](../../examples/swebench_runner.py)**: add `--memory-min-mb` / `--memory-max-mb` flags so the canonical demo can exercise the new fields and serve as a worked example.
    - **SDK docstrings** in [python/arlee/client.py](../../python/arlee/client.py), [python/arlee/sandbox.py](../../python/arlee/sandbox.py), [python/arlee/models.py](../../python/arlee/models.py): document the new kwargs, the units (MiB despite `_mb` suffix), the `on_oom` semantics, and how to interpret `terminated_by` values.
+
+## 10. Implementation & validation record
+
+The design above was implemented and validated end-to-end on a real
+2-Edge GCP cluster (e2-medium apiserver + 2× e2-standard-4 edges).
+This section records what the implementation phase found.
+
+### Bugs surfaced during implementation/validation
+
+Three real bugs that the design didn't predict — all caught by the
+end-to-end test phase and fixed (in the design's recommended way):
+
+1. **`on_oom=kill_sandbox` was a no-op.** Writing `oom_score_adj=-1000`
+   on PID 1 (as §5.3 caveat 2 originally said "always do") makes the
+   kernel skip PID 1 *even when `memory.oom.group=1` says "kill all"*.
+   Result: under `kill_sandbox`, the offending process was killed but
+   PID 1 survived → sandbox stayed Running, defeating the
+   "OOM is unrecoverable" semantic. Fix: only write `-1000` when
+   `on_oom=kill_process`; §5.3 caveat 2 updated to reflect this.
+2. **cloud-init wrote `/etc/docker/daemon.json` after `apt-get install
+   docker.io`,** but the package's postinst auto-starts dockerd — so
+   dockerd ran with the systemd cgroup driver despite our config file.
+   `arlee-edge`'s `--cgroup-parent=/arlee/<sid>` then failed with
+   "cgroup-parent for systemd cgroup should be a valid slice". Fix:
+   write daemon.json *before* the apt-get install. Added a Known Gotcha
+   to [CLAUDE.md](../../CLAUDE.md).
+3. **Apiserver race**: `pick_with_memory` set `reserved_memory_mb`
+   optimistically; an Edge heartbeat firing between the pick and the
+   Edge having processed the forwarded create reported the pre-create
+   value, which the heartbeat handler used to overwrite our correct
+   optimistic count. Separately, `forget_sandbox` never decremented
+   `reserved_memory_mb` — apiserver drifted upward each kill. Fix:
+   heartbeat uses `max(apiserver_value, edge_reported)` (drift catch
+   only, never under-count); `forget_sandbox` decrements by the
+   sandbox's `memory_min_mb` via a new `sandbox_min_mb` map on
+   apiserver state.
+
+### Acceptance results
+
+- **9 codified pytest cases (`@pytest.mark.gcp`) green**, ~57s
+  end-to-end. Covers §8 items 4–7 plus capacity / validation
+  edge-cases: own-max OOM under both `on_oom` modes; hard reservation
+  under pressure; 2-Edge spread distribution; Edge-pressure OOM
+  classified as `OomEdge` (not `Oom`); backward-compat smoke;
+  `NoCapacity` 503; `min > max` rejected with 400;
+  `reserved_memory_mb` visible in `EdgeInfo`. Source:
+  [python/tests/integration/test_memory_limits.py](../../python/tests/integration/test_memory_limits.py).
+- **SWE-bench gold regression (no memory fields): 3/3 RESOLVED.**
+  Default-path behavior unchanged for existing callers.
+- **Rust unit tests: 24 passing** (16 cgroup module + 8 apiserver
+  scheduler), covering §8 items 1–3.
+- **Cloud-init verified**: post-`terraform destroy` + `terraform
+  apply`, `docker info` reported `Cgroup Driver: cgroupfs` on first
+  boot with no manual restart — the bug #2 fix above works.
+
+### §8 item 9 (Anthropic-style noise experiment) — informative null
+
+Ran the SWE-bench gold runner twice on the 3 default easy instances:
+- strict (`memory_min_mb=512, memory_max_mb=512`)
+- lenient (`memory_min_mb=512, memory_max_mb=2048`)
+
+Both: **3/3 RESOLVED**. These instances don't stress memory at the
+512 MiB ceiling, so the experiment couldn't distinguish strict from
+lenient. Per §8 item 9: "Not reproducing it is also informative
+(SWE-bench may not be memory-sensitive in the same way)." A real
+quantitative replication would need ~50 instances per config + a
+memory-sensitive instance subset; the value-add over the codified
+enforcement tests is marginal and was deemed not worth the GCP cost
+at this stage.
+
+### What's intentionally not built
+
+Items the design listed as "future" or "out of scope" remain so:
+
+- Proactive sandbox-level OOM detection on `require()` (§5.4 future).
+  Currently only post-exec detection. No consumer has asked for it.
+- `memory.events` epoll stream for push-based state transitions
+  (§5.4 future).
+- microVM / fullVM / Function Call substrates (§5.5). Only Container
+  is implemented; the `SubstrateRuntime` trait + capabilities table
+  are ready for them.
+- `max_overcommit_ratio` admission policy (§5.2). Will revisit if
+  `OomEdge` proves frequent in production.
+- PSI-based proactive shedding (§5.2). Same condition.
+- Doc-drift checker. The §9 step 7 entrypoint-doc update missed
+  README.md's "least-loaded scheduler" line on first pass; caught by
+  manual review during this archive step.

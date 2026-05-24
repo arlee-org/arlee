@@ -77,7 +77,7 @@ class Client:
     ) -> Sandbox:
         """Create a sandbox and return its handle.
 
-        Memory limits (see docs/design/memory-limits.md for the full design):
+        Memory limits (see docs/memory-limits.md for the full reference):
 
         - ``memory_min_mb``: guaranteed floor in MiB. Hard-reserved via
           cgroup v2 ``memory.min``; the apiserver also uses it as the

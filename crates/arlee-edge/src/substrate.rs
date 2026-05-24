@@ -9,7 +9,7 @@
 //! and dispatches sandbox operations through it.
 //!
 //! Rationale for introducing the trait now (only one impl exists today) is
-//! captured in `docs/design/memory-limits.md` §7.1.
+//! captured in `docs/memory-limits.md` §4.1.
 //!
 //! Adding a new substrate is: one new `impl SubstrateRuntime` + one new
 //! variant in the [`Substrate`] enum + a matching

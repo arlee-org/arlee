@@ -34,7 +34,7 @@ asyncio_mode = "auto"
 # auto-skip when ARLEE_APISERVER is unset (see tests/conftest.py), so
 # default `pytest` runs only unit tests. To exercise them, run
 # `pytest -m gcp` after `terraform apply` + `eval "$(terraform output -raw env_setup)"`.
-# See docs/design/memory-limits.md §8.
+# See docs/memory-limits.md §5.
 markers = [
     "gcp: requires a live Arlee cluster (ARLEE_APISERVER + ARLEE_TOKEN)",
 ]
