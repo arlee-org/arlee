@@ -17,7 +17,6 @@ use tracing::warn;
 
 use crate::config::ApiserverConfig;
 use crate::error::AppError;
-use crate::scheduler::pick_edge;
 use crate::state::State as ClusterState;
 
 pub struct AppState {
@@ -184,27 +183,41 @@ async fn create_sandbox(
     State(s): State<Arc<AppState>>,
     Json(req): Json<CreateSandboxRequest>,
 ) -> Result<Json<SandboxInfo>, AppError> {
-    let edge = pick_edge(&s.state).await.map_err(|_| AppError::NoEdges)?;
+    let edge = s
+        .state
+        .pick_least_loaded()
+        .await
+        .ok_or(AppError::NoEdges)?;
     let url = format!("{}/sandboxes", edge.url.trim_end_matches('/'));
-    let r = s
+    let r = match s
         .http
         .post(&url)
         .header("X-Arlee-Token", &s.cfg.token)
         .json(&req)
         .send()
         .await
-        .map_err(|e| AppError::BadGateway(format!("{}: {e}", edge.edge_id)))?;
+    {
+        Ok(r) => r,
+        Err(e) => {
+            s.state.release_reservation(&edge.edge_id).await;
+            return Err(AppError::BadGateway(format!("{}: {e}", edge.edge_id)));
+        }
+    };
     if !r.status().is_success() {
+        s.state.release_reservation(&edge.edge_id).await;
         return Err(AppError::BadGateway(format!(
             "{} returned {}",
             edge.edge_id,
             r.status()
         )));
     }
-    let info: SandboxInfo = r
-        .json()
-        .await
-        .map_err(|e| AppError::BadGateway(format!("decode: {e}")))?;
+    let info: SandboxInfo = match r.json().await {
+        Ok(v) => v,
+        Err(e) => {
+            s.state.release_reservation(&edge.edge_id).await;
+            return Err(AppError::BadGateway(format!("decode: {e}")));
+        }
+    };
     s.state.record_sandbox(info.id.clone(), &edge.edge_id).await;
     Ok(Json(info))
 }

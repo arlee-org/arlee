@@ -97,20 +97,40 @@ impl State {
             .collect()
     }
 
-    pub async fn healthy_edges(&self) -> Vec<EdgeRecord> {
+    /// Pick the healthy Edge with the smallest sandbox_count and optimistically
+    /// increment its count so a burst of concurrent picks doesn't all stack on
+    /// the same Edge. Caller MUST call `release_reservation` if the downstream
+    /// create_sandbox call to that Edge fails.
+    ///
+    /// The next heartbeat (every 10s) will reconcile sandbox_count against the
+    /// Edge's actual view, so this optimistic count is only authoritative for
+    /// the brief window between pick and heartbeat.
+    pub async fn pick_least_loaded(&self) -> Option<EdgeRecord> {
+        let mut inner = self.inner.write().await;
         let now = Utc::now();
-        self.inner
-            .read()
-            .await
+        let threshold = self.healthy_threshold;
+        let chosen_id = inner
             .edges
             .values()
             .filter(|e| {
                 now.signed_duration_since(e.last_seen)
                     .to_std()
-                    .map_or(false, |d| d < self.healthy_threshold)
+                    .map_or(false, |d| d < threshold)
             })
-            .cloned()
-            .collect()
+            .min_by_key(|e| e.sandbox_count)
+            .map(|e| e.edge_id.clone())?;
+        let edge = inner.edges.get_mut(&chosen_id)?;
+        edge.sandbox_count += 1;
+        Some(edge.clone())
+    }
+
+    /// Roll back the optimistic increment from `pick_least_loaded` when the
+    /// downstream create_sandbox call fails.
+    pub async fn release_reservation(&self, edge_id: &str) {
+        let mut inner = self.inner.write().await;
+        if let Some(e) = inner.edges.get_mut(edge_id) {
+            e.sandbox_count = e.sandbox_count.saturating_sub(1);
+        }
     }
 
     pub async fn record_sandbox(&self, sandbox_id: String, edge_id: &str) {

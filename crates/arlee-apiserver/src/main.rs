@@ -1,7 +1,6 @@
 mod api;
 mod config;
 mod error;
-mod scheduler;
 mod state;
 
 use std::sync::Arc;
