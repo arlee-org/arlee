@@ -48,13 +48,21 @@ arlee edges   # both Edges should show healthy=✓
 
 ```bash
 # SSH into the Apiserver VM (workload runs there, not on your laptop).
-gcloud compute ssh arlee-apiserver --zone=us-central1-a --project=arlee-497222
+gcloud compute ssh arlee-apiserver \
+    --zone=us-central1-a --project=arlee-497222 --tunnel-through-iap
 
-# On the VM:
-cd /opt/arlee
-python3 examples/swebench_runner.py --gold --n 3
+# On the VM — runner uses the venv that the startup-script set up at
+# /opt/arlee-venv, which has the SDK and `swebench` package pre-installed.
+sudo /opt/arlee-venv/bin/python /opt/arlee/examples/swebench_runner.py --gold \
+    --instance-id marshmallow-code__marshmallow-1359 \
+    --instance-id sqlfluff__sqlfluff-1517 \
+    --instance-id pvlib__pvlib-python-1072
 # expect: 3/3 PASS
 ```
+
+The runner needs `ARLEE_APISERVER` and `ARLEE_TOKEN` in its environment.
+Easy: `source /etc/arlee/apiserver.env` before running, then export
+`ARLEE_APISERVER=http://127.0.0.1:8080`.
 
 Pull trajectories back to your laptop:
 

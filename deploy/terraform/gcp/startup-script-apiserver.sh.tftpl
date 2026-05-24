@@ -15,7 +15,8 @@ if [ ! -f "$INSTALL_MARKER" ]; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
     apt-get install -y --no-install-recommends \
-        git curl ca-certificates build-essential pkg-config libssl-dev
+        git curl ca-certificates build-essential pkg-config libssl-dev \
+        python3 python3-venv python3-pip
 
     # Install rustup + stable toolchain as root (used for the build only).
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
@@ -27,6 +28,13 @@ if [ ! -f "$INSTALL_MARKER" ]; then
     cd /opt/arlee
     cargo build --release -p arlee-apiserver
     install -m 0755 target/release/arlee-apiserver /usr/local/bin/arlee-apiserver
+
+    # Python venv for examples/ — Arlee SDK + swebench harness deps.
+    # Runner scripts use /opt/arlee-venv/bin/python.
+    python3 -m venv /opt/arlee-venv
+    /opt/arlee-venv/bin/pip install --upgrade pip
+    /opt/arlee-venv/bin/pip install -e /opt/arlee/python
+    /opt/arlee-venv/bin/pip install swebench datasets
 
     touch "$INSTALL_MARKER"
 fi
