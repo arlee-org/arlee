@@ -59,7 +59,12 @@ class InstanceResult:
     eval_log_path: Path | None = None
 
 
-async def run_instance(instance: dict[str, Any], log_dir: Path) -> InstanceResult:
+async def run_instance(
+    instance: dict[str, Any],
+    log_dir: Path,
+    memory_min_mb: int | None = None,
+    memory_max_mb: int | None = None,
+) -> InstanceResult:
     from swebench.harness.grading import get_eval_report
     from swebench.harness.test_spec.test_spec import make_test_spec
 
@@ -68,7 +73,12 @@ async def run_instance(instance: dict[str, Any], log_dir: Path) -> InstanceResul
     test_spec = make_test_spec(instance)
     gold_patch = instance["patch"]
 
-    async with await arlee.create_sandbox(image=image, timeout=1800.0) as sb:
+    async with await arlee.create_sandbox(
+        image=image,
+        timeout=1800.0,
+        memory_min_mb=memory_min_mb,
+        memory_max_mb=memory_max_mb,
+    ) as sb:
         try:
             # Apply the gold patch (the "model output" we're evaluating).
             # eval_script applies test_patch but NOT the model patch.
@@ -161,7 +171,13 @@ def load_instances(instance_ids: list[str]) -> list[dict[str, Any]]:
     return [by_id[i] for i in instance_ids]
 
 
-async def main_async(instance_ids: list[str], gold_only: bool, log_dir: Path) -> int:
+async def main_async(
+    instance_ids: list[str],
+    gold_only: bool,
+    log_dir: Path,
+    memory_min_mb: int | None = None,
+    memory_max_mb: int | None = None,
+) -> int:
     if not gold_only:
         raise SystemExit("only --gold mode is currently supported (the agent IS the gold patch)")
 
@@ -173,7 +189,12 @@ async def main_async(instance_ids: list[str], gold_only: bool, log_dir: Path) ->
     # Bump the default client timeout for SWE-bench's slow image pulls + long evals.
     arlee.configure(timeout=CLIENT_TIMEOUT_SECONDS)
     instances = load_instances(instance_ids)
-    results = await asyncio.gather(*(run_instance(i, log_dir) for i in instances))
+    results = await asyncio.gather(
+        *(
+            run_instance(i, log_dir, memory_min_mb, memory_max_mb)
+            for i in instances
+        )
+    )
 
     n_resolved = sum(1 for r in results if r.resolved)
     print()
@@ -208,9 +229,27 @@ def main() -> int:
         default=Path(tempfile.gettempdir()) / "arlee-swebench-logs",
         help="Where to write per-instance eval logs.",
     )
+    p.add_argument(
+        "--memory-min-mb",
+        type=int,
+        default=None,
+        help="Guaranteed memory floor per sandbox in MiB (cgroup memory.min). "
+             "Apiserver reserves this on the chosen Edge. Omit to inherit "
+             "host default (no reservation).",
+    )
+    p.add_argument(
+        "--memory-max-mb",
+        type=int,
+        default=None,
+        help="Hard memory ceiling per sandbox in MiB (cgroup memory.max). "
+             "Exceeding it OOM-kills the offending process (on_oom default). "
+             "Omit to inherit host default (no ceiling).",
+    )
     args = p.parse_args()
     ids = args.instance_id or DEFAULT_INSTANCE_IDS
-    return asyncio.run(main_async(ids, args.gold, args.log_dir))
+    return asyncio.run(
+        main_async(ids, args.gold, args.log_dir, args.memory_min_mb, args.memory_max_mb)
+    )
 
 
 if __name__ == "__main__":

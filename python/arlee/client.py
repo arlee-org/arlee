@@ -19,6 +19,8 @@ from arlee.models import (
     EdgeInfo,
     ExecRequest,
     ExecResult,
+    OnOom,
+    ResourceSpec,
     SandboxInfo,
     Substrate,
     TrajectoryEntry,
@@ -68,12 +70,51 @@ class Client:
         substrate: Substrate | str = Substrate.CONTAINER,
         env: dict[str, str] | None = None,
         timeout: float | None = None,
+        *,
+        memory_min_mb: int | None = None,
+        memory_max_mb: int | None = None,
+        on_oom: OnOom | str = OnOom.KILL_PROCESS,
     ) -> Sandbox:
+        """Create a sandbox and return its handle.
+
+        Memory limits (see docs/design/memory-limits.md for the full design):
+
+        - ``memory_min_mb``: guaranteed floor in MiB. Hard-reserved via
+          cgroup v2 ``memory.min``; the apiserver also uses it as the
+          scheduler reservation, so requests are rejected with 503
+          NoCapacity if no Edge has enough free memory.
+        - ``memory_max_mb``: hard ceiling in MiB. Exceeding it triggers
+          OOM kill (scope per ``on_oom``).
+        - ``on_oom``: ``"kill_process"`` (default; sandbox survives,
+          ``ExecResult.terminated_by == "oom"``) or ``"kill_sandbox"``
+          (whole sandbox dies, transitions to status=failed with
+          ``terminated_by == "oom"``).
+
+        ``memory_min_mb`` and ``memory_max_mb`` can each be ``None``
+        independently. The Anthropic infrastructure-noise study
+        recommends ``memory_max_mb`` be ~2-3x ``memory_min_mb`` to leave
+        burst headroom; setting them equal removes that headroom.
+
+        Note on units: ``_mb`` is the Docker convention (``-m 1024m``)
+        meaning MiB (1024*1024 bytes), not 10^6 bytes.
+
+        Distinguishing OOM causes on the result: ``ExecResult.terminated_by``
+        is ``"oom"`` for own-max breach (raise the ceiling or shrink the
+        workload) vs ``"oom_edge"`` for collateral damage from Edge-wide
+        pressure (retry by re-creating the sandbox so the scheduler picks
+        again — re-executing on the same sandbox lands on the same Edge
+        under the same pressure).
+        """
         body = CreateSandboxRequest(
             image=image,
             substrate=Substrate(substrate),
             env=env or {},
             timeout=timeout,
+            resources=ResourceSpec(
+                memory_min_mb=memory_min_mb,
+                memory_max_mb=memory_max_mb,
+            ),
+            on_oom=OnOom(on_oom),
         )
         r = await self._http.post("/sandboxes", json=body.model_dump(mode="json"))
         r.raise_for_status()

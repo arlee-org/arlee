@@ -28,8 +28,12 @@ from arlee.models import (
     EdgeCapacity,
     EdgeInfo,
     ExecResult,
+    ExecTermination,
+    OnOom,
+    ResourceSpec,
     SandboxInfo,
     SandboxStatus,
+    SandboxTermination,
     Substrate,
     TrajectoryEntry,
 )
@@ -94,9 +98,22 @@ async def create_sandbox(
     substrate: Substrate | str = Substrate.CONTAINER,
     env: dict[str, str] | None = None,
     timeout: float | None = None,
+    *,
+    memory_min_mb: int | None = None,
+    memory_max_mb: int | None = None,
+    on_oom: OnOom | str = OnOom.KILL_PROCESS,
 ) -> Sandbox:
+    """Module-level shortcut for `Client.create_sandbox`. See that method
+    for the full docstring (memory limits, on_oom semantics, OOM
+    interpretation)."""
     return await _client().create_sandbox(
-        image=image, substrate=substrate, env=env, timeout=timeout
+        image=image,
+        substrate=substrate,
+        env=env,
+        timeout=timeout,
+        memory_min_mb=memory_min_mb,
+        memory_max_mb=memory_max_mb,
+        on_oom=on_oom,
     )
 
 
@@ -121,9 +138,13 @@ __all__ = [
     "EdgeCapacity",
     "EdgeInfo",
     "ExecResult",
+    "ExecTermination",
+    "OnOom",
+    "ResourceSpec",
     "Sandbox",
     "SandboxInfo",
     "SandboxStatus",
+    "SandboxTermination",
     "Substrate",
     "TrajectoryEntry",
     "capacity",

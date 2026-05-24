@@ -1,7 +1,9 @@
 mod api;
 mod config;
-mod docker_runner;
+mod docker_substrate;
+mod edge_cgroup;
 mod error;
+mod substrate;
 mod trajectory;
 
 use std::sync::Arc;
@@ -15,7 +17,8 @@ use tracing_subscriber::EnvFilter;
 
 use api::AppState;
 use config::EdgeConfig;
-use docker_runner::DockerRunner;
+use docker_substrate::DockerSubstrate;
+use substrate::SubstrateRuntime;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 
@@ -30,7 +33,19 @@ async fn main() -> Result<()> {
     let cfg = EdgeConfig::from_env()?;
     info!(edge_id = %cfg.edge_id, "starting arlee-edge");
 
-    let runner = Arc::new(DockerRunner::new(cfg.edge_id.clone(), cfg.trajectory_dir.clone()).await?);
+    let docker_substrate =
+        DockerSubstrate::new(cfg.edge_id.clone(), cfg.trajectory_dir.clone()).await?;
+    match docker_substrate.reconcile_stale_cgroups() {
+        Ok(0) => {}
+        Ok(n) => info!(cleaned = n, "reconciled stale cgroups at startup"),
+        Err(e) => warn!("cgroup reconciliation: {e}"),
+    }
+    let runner: Arc<dyn SubstrateRuntime> = Arc::new(docker_substrate);
+    info!(
+        capabilities = ?runner.capabilities(),
+        total_memory_mb = runner.total_memory_mb(),
+        "substrate ready"
+    );
 
     // Spawn registration + heartbeat loop.
     let reg_cfg = cfg.clone();
@@ -55,7 +70,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn register_loop(cfg: EdgeConfig, runner: Arc<DockerRunner>) -> Result<()> {
+async fn register_loop(cfg: EdgeConfig, runner: Arc<dyn SubstrateRuntime>) -> Result<()> {
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()?;
@@ -72,6 +87,8 @@ async fn register_loop(cfg: EdgeConfig, runner: Arc<DockerRunner>) -> Result<()>
             edge_id: cfg.edge_id.clone(),
             url: cfg.public_url.clone(),
             sandbox_count: runner.sandbox_count().await,
+            total_memory_mb: runner.total_memory_mb(),
+            reserved_memory_mb: runner.reserved_memory_mb().await,
         };
         let res = http
             .post(&register_url)
@@ -95,6 +112,7 @@ async fn register_loop(cfg: EdgeConfig, runner: Arc<DockerRunner>) -> Result<()>
         tokio::time::sleep(HEARTBEAT_INTERVAL).await;
         let body = HeartbeatRequest {
             sandbox_count: runner.sandbox_count().await,
+            reserved_memory_mb: runner.reserved_memory_mb().await,
         };
         let res = http
             .post(&heartbeat_url)
@@ -109,6 +127,8 @@ async fn register_loop(cfg: EdgeConfig, runner: Arc<DockerRunner>) -> Result<()>
                     edge_id: cfg.edge_id.clone(),
                     url: cfg.public_url.clone(),
                     sandbox_count: runner.sandbox_count().await,
+                    total_memory_mb: runner.total_memory_mb(),
+                    reserved_memory_mb: runner.reserved_memory_mb().await,
                 };
                 let _ = http
                     .post(&register_url)

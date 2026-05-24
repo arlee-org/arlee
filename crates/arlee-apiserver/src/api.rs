@@ -77,7 +77,13 @@ async fn register_edge(
     Json(req): Json<RegisterEdgeRequest>,
 ) -> Result<Json<OkResponse>, AppError> {
     s.state
-        .register_edge(req.edge_id.clone(), req.url.clone(), req.sandbox_count)
+        .register_edge(
+            req.edge_id.clone(),
+            req.url.clone(),
+            req.sandbox_count,
+            req.total_memory_mb,
+            req.reserved_memory_mb,
+        )
         .await;
     // Best-effort: ask the Edge for its sandboxes so we can re-route after a restart.
     let url = format!("{}/sandboxes", req.url.trim_end_matches('/'));
@@ -107,7 +113,10 @@ async fn heartbeat(
     Path(id): Path<String>,
     Json(req): Json<HeartbeatRequest>,
 ) -> Result<Json<OkResponse>, AppError> {
-    if s.state.heartbeat(&id, req.sandbox_count).await {
+    if s.state
+        .heartbeat(&id, req.sandbox_count, req.reserved_memory_mb)
+        .await
+    {
         Ok(Json(OkResponse::ok()))
     } else {
         Err(AppError::NotFound("unknown edge; re-register".into()))
@@ -137,6 +146,8 @@ async fn capacity(State(s): State<Arc<AppState>>) -> Json<Vec<EdgeCapacity>> {
                 .signed_duration_since(e.last_seen)
                 .to_std()
                 .map_or(false, |d| d < threshold),
+            total_memory_mb: 0,
+            reserved_memory_mb: 0,
         })
         .collect();
     Json(out)
@@ -183,11 +194,23 @@ async fn create_sandbox(
     State(s): State<Arc<AppState>>,
     Json(req): Json<CreateSandboxRequest>,
 ) -> Result<Json<SandboxInfo>, AppError> {
-    let edge = s
-        .state
-        .pick_least_loaded()
-        .await
-        .ok_or(AppError::NoEdges)?;
+    // ----- Validation: substrate capabilities + sane spec -----
+    validate_create(&req)?;
+
+    let request_min_mb = req.resources.memory_min_mb.unwrap_or(0);
+
+    let edge = match s.state.pick_with_memory(request_min_mb).await {
+        crate::state::PickResult::Ok(e) => e,
+        crate::state::PickResult::NoEdges => return Err(AppError::NoEdges),
+        crate::state::PickResult::NoCapacity => {
+            return Err(AppError::NoCapacity(request_min_mb))
+        }
+    };
+
+    let release_on_err = |s: Arc<AppState>, edge_id: String| async move {
+        s.state.release_reservation(&edge_id, request_min_mb).await;
+    };
+
     let url = format!("{}/sandboxes", edge.url.trim_end_matches('/'));
     let r = match s
         .http
@@ -199,27 +222,58 @@ async fn create_sandbox(
     {
         Ok(r) => r,
         Err(e) => {
-            s.state.release_reservation(&edge.edge_id).await;
+            release_on_err(s.clone(), edge.edge_id.clone()).await;
             return Err(AppError::BadGateway(format!("{}: {e}", edge.edge_id)));
         }
     };
     if !r.status().is_success() {
-        s.state.release_reservation(&edge.edge_id).await;
+        let status = r.status();
+        release_on_err(s.clone(), edge.edge_id.clone()).await;
         return Err(AppError::BadGateway(format!(
             "{} returned {}",
-            edge.edge_id,
-            r.status()
+            edge.edge_id, status
         )));
     }
     let info: SandboxInfo = match r.json().await {
         Ok(v) => v,
         Err(e) => {
-            s.state.release_reservation(&edge.edge_id).await;
+            release_on_err(s.clone(), edge.edge_id.clone()).await;
             return Err(AppError::BadGateway(format!("decode: {e}")));
         }
     };
     s.state.record_sandbox(info.id.clone(), &edge.edge_id).await;
     Ok(Json(info))
+}
+
+/// Apply substrate-specific capability checks + global sanity (min <= max).
+/// Returns AppError::BadRequest with a specific message so the caller knows
+/// exactly which constraint was violated.
+fn validate_create(req: &CreateSandboxRequest) -> Result<(), AppError> {
+    if let (Some(min), Some(max)) = (req.resources.memory_min_mb, req.resources.memory_max_mb)
+    {
+        if min > max {
+            return Err(AppError::BadRequest(format!(
+                "memory_min_mb ({min}) must be <= memory_max_mb ({max})"
+            )));
+        }
+    }
+    let caps = arlee_models::SubstrateCapabilities::for_substrate(req.substrate);
+    let elastic =
+        req.resources.memory_min_mb != req.resources.memory_max_mb;
+    if elastic && !caps.supports_elastic_memory {
+        return Err(AppError::BadRequest(format!(
+            "substrate {:?} does not support elastic memory; \
+             set memory_min_mb == memory_max_mb",
+            req.substrate
+        )));
+    }
+    if !caps.supports_on_oom.contains(&req.on_oom) {
+        return Err(AppError::BadRequest(format!(
+            "substrate {:?} does not support on_oom={:?}",
+            req.substrate, req.on_oom
+        )));
+    }
+    Ok(())
 }
 
 async fn kill_sandbox(

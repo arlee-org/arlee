@@ -59,6 +59,9 @@ clap = { version = "4.5", features = ["derive", "env"] }
 # futures helpers
 futures = "0.3"
 
+# async trait methods on dyn-compatible traits (MSRV 1.75 can't do this natively)
+async-trait = "0.1"
+
 # parking_lot for sync mutexes inside async (used sparingly)
 parking_lot = "0.12"
 

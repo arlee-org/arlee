@@ -31,6 +31,25 @@ single GCP project: 1 Apiserver VM + N Edge VMs (default N=2), in one VPC.
   (and `git_repo`, which still gets cloned on the Apiserver VM for the
   Python SDK source and `examples/`).
 
+### Edge VM requirements
+
+Edge VMs need cgroup v2 + Docker's `cgroupfs` cgroup driver so per-sandbox
+memory limits are honored as hard `memory.min` / `memory.max` reservations
+(see [docs/design/memory-limits.md §7.2](../docs/design/memory-limits.md)).
+The cloud-init in this module sets both:
+
+- The image (Ubuntu 22.04+) ships with cgroup v2 mounted at
+  `/sys/fs/cgroup`. Verify with `mount | grep cgroup2` on the VM.
+- `/etc/docker/daemon.json` is written with
+  `{"exec-opts": ["native.cgroupdriver=cgroupfs"]}` before dockerd starts.
+  Docker's modern default is `systemd`; we override because our cgroup
+  manager uses path-style `--cgroup-parent=/arlee/<sandbox_id>`, not
+  systemd slice names.
+
+If you fork this module and write your own cloud-init, both of these are
+non-optional. Without them, `arlee-edge` fails to start (it fails fast
+rather than silently dropping the memory limit semantics).
+
 ## 5-minute deploy
 
 ```bash

@@ -13,6 +13,17 @@ if [ ! -f "$INSTALL_MARKER" ]; then
     apt-get update
     apt-get install -y --no-install-recommends \
         ca-certificates curl docker.io
+
+    # Force Docker to the cgroupfs cgroup driver so arlee-edge can use
+    # path-style --cgroup-parent=/arlee/<sid> for hard memory.min
+    # reservations. Modern Docker defaults to systemd driver; we override.
+    # See docs/design/memory-limits.md §7.2.
+    mkdir -p /etc/docker
+    cat > /etc/docker/daemon.json <<'JSON'
+{
+  "exec-opts": ["native.cgroupdriver=cgroupfs"]
+}
+JSON
     systemctl enable --now docker
 
     # Pre-built edge binary.

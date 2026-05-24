@@ -13,11 +13,11 @@ use arlee_models::{
 };
 use serde::Deserialize;
 
-use crate::docker_runner::DockerRunner;
 use crate::error::{map_runner_err, AppError};
+use crate::substrate::SubstrateRuntime;
 
 pub struct AppState {
-    pub runner: Arc<DockerRunner>,
+    pub runner: Arc<dyn SubstrateRuntime>,
     pub token: String,
     pub edge_id: String,
 }
@@ -70,7 +70,7 @@ async fn create_sandbox(
 ) -> Result<Json<SandboxInfo>, AppError> {
     let info = state
         .runner
-        .create(&req.image, req.substrate, req.env)
+        .create(&req)
         .await
         .map_err(AppError::from)?;
     Ok(Json(info))
@@ -97,14 +97,7 @@ async fn exec_in_sandbox(
 ) -> Result<Json<arlee_models::ExecResult>, AppError> {
     let r = state
         .runner
-        .exec(
-            &id,
-            &req.command,
-            req.cwd.as_deref(),
-            &req.env,
-            req.user.as_deref(),
-            req.timeout,
-        )
+        .exec(&id, &req)
         .await
         .map_err(map_runner_err)?;
     Ok(Json(r))
@@ -157,6 +150,8 @@ async fn capacity(State(state): State<Arc<AppState>>) -> Json<EdgeCapacity> {
         edge_id: state.edge_id.clone(),
         sandbox_count: state.runner.sandbox_count().await,
         healthy: true,
+        total_memory_mb: state.runner.total_memory_mb(),
+        reserved_memory_mb: state.runner.reserved_memory_mb().await,
     })
 }
 

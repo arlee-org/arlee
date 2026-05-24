@@ -62,14 +62,24 @@ entry + sandbox-as-object + async-context auto-cleanup:
 import arlee
 # ARLEE_APISERVER + ARLEE_TOKEN from env, or arlee.configure(apiserver=..., token=...)
 
-async with await arlee.create_sandbox(image="ubuntu:22.04") as sb:
+async with await arlee.create_sandbox(
+    image="ubuntu:22.04",
+    memory_min_mb=1024,         # guaranteed floor (cgroup memory.min)
+    memory_max_mb=3072,         # hard ceiling (cgroup memory.max)
+    on_oom="kill_process",      # default; or "kill_sandbox" for eval
+) as sb:
     res = await sb.exec("pytest tests/", cwd="/testbed", env={"FOO": "bar"})
+    if res.terminated_by == "oom":
+        print("workload exceeded its own ceiling; raise memory_max_mb")
+    elif res.terminated_by == "oom_edge":
+        print("Edge-pressure OOM; re-create the sandbox to retry on a fresh placement")
     await sb.write_file("/tmp/patch.diff", patch_bytes)
-    await sb.upload_file("./local.py", "/remote/local.py")
     contents = await sb.read_file("/tmp/output")
     trajectory = await sb.get_trajectory()
 # sb.kill() runs on context exit
 ```
+
+The apiserver schedules each sandbox onto the Edge with the most available memory headroom (spread, not pack), reserving `memory_min_mb` on that Edge as a hard cgroup-enforced floor. Memory fields are optional; omit both to inherit the current host-default (no limits, no reservation). See [docs/design/memory-limits.md](docs/design/memory-limits.md) for the full design.
 
 For multi-cluster / explicit lifecycle control, `arlee.Client(apiserver=..., token=...)` is still exposed; `client.create_sandbox(...)` returns the same `Sandbox` handle.
 

@@ -31,4 +31,8 @@ thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 futures.workspace = true
+async-trait.workspace = true
 parking_lot.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
