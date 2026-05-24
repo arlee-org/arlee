@@ -1,12 +1,9 @@
 #!/bin/bash
 # Edge VM startup script.
-# Installs Docker + builds the Rust edge binary, then registers with the Apiserver.
+# Downloads the pre-built arlee-edge binary from a GitHub release
+# (built by .github/workflows/build.yml). Installs Docker (the substrate)
+# and registers with the Apiserver via the systemd unit.
 set -euxo pipefail
-
-# startup-scripts run without a normal user environment; rustup and cargo both
-# expect HOME to be set so they can write to ~/.cargo, ~/.rustup.
-export HOME=/root
-export PATH="$HOME/.cargo/bin:$PATH"
 
 INSTALL_MARKER=/var/arlee/installed
 mkdir -p /var/arlee /var/arlee/trajectories /etc/arlee /opt
@@ -15,20 +12,13 @@ if [ ! -f "$INSTALL_MARKER" ]; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
     apt-get install -y --no-install-recommends \
-        git curl ca-certificates build-essential pkg-config libssl-dev \
-        docker.io
-
+        ca-certificates curl docker.io
     systemctl enable --now docker
 
-    # Install rustup + stable toolchain as root (used for the build only).
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-        | sh -s -- -y --default-toolchain stable --profile minimal
-    source "$HOME/.cargo/env"
-
-    git clone --depth 1 --branch '${git_ref}' '${git_repo}' /opt/arlee
-    cd /opt/arlee
-    cargo build --release -p arlee-edge
-    install -m 0755 target/release/arlee-edge /usr/local/bin/arlee-edge
+    # Pre-built edge binary.
+    curl -fsSL -o /usr/local/bin/arlee-edge \
+        '${release_base_url}/arlee-edge'
+    chmod 0755 /usr/local/bin/arlee-edge
 
     touch "$INSTALL_MARKER"
 fi

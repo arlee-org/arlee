@@ -58,9 +58,15 @@ variable "git_repo" {
 }
 
 variable "git_ref" {
-  description = "Branch/tag/commit to check out"
+  description = "Branch/tag/commit to check out (used on the Apiserver VM for python SDK source and examples/)"
   type        = string
   default     = "main"
+}
+
+variable "release_base_url" {
+  description = "Base URL where the VMs fetch pre-built arlee-apiserver / arlee-edge binaries. Defaults to upstream's rolling release built by .github/workflows/build.yml on every push to main. Override if you fork."
+  type        = string
+  default     = "https://github.com/arlee-org/arlee/releases/download/main-latest"
 }
 
 variable "operator_ip_cidr" {

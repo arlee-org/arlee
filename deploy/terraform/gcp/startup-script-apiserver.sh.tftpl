@@ -1,12 +1,9 @@
 #!/bin/bash
 # Apiserver VM startup script.
-# Runs on every boot, but the install/build step is gated by a marker file.
+# Downloads the pre-built arlee-apiserver binary from a GitHub release
+# (built by .github/workflows/build.yml) instead of compiling on the VM.
+# Boot time goes from ~5-8 min (cargo build) to ~30-60s (apt + download).
 set -euxo pipefail
-
-# startup-scripts run without a normal user environment; rustup and cargo both
-# expect HOME to be set so they can write to ~/.cargo, ~/.rustup.
-export HOME=/root
-export PATH="$HOME/.cargo/bin:$PATH"
 
 INSTALL_MARKER=/var/arlee/installed
 mkdir -p /var/arlee /etc/arlee /opt
@@ -15,22 +12,17 @@ if [ ! -f "$INSTALL_MARKER" ]; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
     apt-get install -y --no-install-recommends \
-        git curl ca-certificates build-essential pkg-config libssl-dev \
-        python3 python3-venv python3-pip
+        ca-certificates curl git python3 python3-venv python3-pip
 
-    # Install rustup + stable toolchain as root (used for the build only).
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-        | sh -s -- -y --default-toolchain stable --profile minimal
-    source "$HOME/.cargo/env"
+    # Pre-built apiserver binary.
+    curl -fsSL -o /usr/local/bin/arlee-apiserver \
+        '${release_base_url}/arlee-apiserver'
+    chmod 0755 /usr/local/bin/arlee-apiserver
 
-    # Clone source and build release binaries.
+    # Source clone for python SDK + examples/ (small, no cargo build).
     git clone --depth 1 --branch '${git_ref}' '${git_repo}' /opt/arlee
-    cd /opt/arlee
-    cargo build --release -p arlee-apiserver
-    install -m 0755 target/release/arlee-apiserver /usr/local/bin/arlee-apiserver
 
-    # Python venv for examples/ — Arlee SDK + swebench harness deps.
-    # Runner scripts use /opt/arlee-venv/bin/python.
+    # Python venv with the SDK + swebench harness (for examples/swebench_runner.py).
     python3 -m venv /opt/arlee-venv
     /opt/arlee-venv/bin/pip install --upgrade pip
     /opt/arlee-venv/bin/pip install -e /opt/arlee/python

@@ -2,7 +2,10 @@
 
 **A**gentic **R**L **E**xecution **E**nvironment
 
-> **Status:** Work in progress. This README describes the intended scope and roadmap; most components are not yet implemented.
+> **Status:** v0 shipped (2026-05-24). Acceptance — 3 SWE-bench Verified gold
+> patches resolved across 2 GCP Edge VMs — met. Beyond v0, most items in the
+> "Roadmap" section are still future work; see [docs/v0-plan.md](docs/v0-plan.md)
+> for the precise scope and validation record.
 
 ## What Arlee Is
 
@@ -35,6 +38,71 @@ The three words in the name each carve out part of the scope:
 
 Arlee draws directly on the interface design of **DeepSeek Elastic Compute (DSec)** described in the [DeepSeek V4 report](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/blob/main/DeepSeek_V4.pdf) — in particular, the idea of a single SDK abstracting multiple execution substrates (function call / container / microVM / fullVM) behind a unified command-execution, file-transfer, and TTY surface, plus globally ordered per-sandbox trajectory logs that enable replay and preemption-safe resumption. Arlee aims to be a community implementation of that interface shape; it will not attempt DSec-level optimizations on day one.
 
+## What's in v0
+
+### Architecture
+
+| Component | Language | Runs where | Job |
+|---|---|---|---|
+| `arlee-apiserver` | Rust (axum) | One cloud VM | HTTP API gateway, edge registry, least-loaded scheduler with optimistic reservation, forwarding proxy to Edges |
+| `arlee-edge` | Rust (axum + bollard) | Each cloud VM with Docker | Per-host sandbox driver; runs containers, serializes exec per sandbox, writes JSONL trajectory |
+| `arlee` Python SDK | Python (httpx + pydantic) | Inside the consumer (eval script, RL trainer adapter, …) | Async client over the HTTP API |
+| `arlee` CLI | Rust (clap) | Operator's laptop | Thin wrapper for `terraform`, edge/sandbox/log queries |
+| Terraform module | HCL | Operator's laptop → GCP | Provisions Apiserver VM + N Edge VMs + VPC + firewalls |
+| GitHub Actions | YAML | CI | Builds `arlee-apiserver` and `arlee-edge` on push to main, publishes to a rolling `main-latest` release the VMs `curl` on first boot |
+
+Auth between every component is a single shared token in the `X-Arlee-Token` header, intra-VPC only, no TLS.
+
+### Interfaces
+
+**Python SDK** — what RL trainers / eval harnesses call into:
+
+```python
+import arlee
+
+async with arlee.Client(apiserver=..., token=...) as c:
+    sb = await c.create_sandbox(image="ubuntu:22.04", substrate="container")
+    res = await c.exec(sb.id, "echo hello")
+    await c.write_file(sb.id, "/tmp/patch.diff", patch_bytes)
+    traj = await c.get_trajectory(sb.id)
+    await c.kill_sandbox(sb.id)
+```
+
+**HTTP API** — language-agnostic surface the SDK targets:
+
+| | |
+|---|---|
+| `POST /sandboxes` | create |
+| `DELETE /sandboxes/{id}` | kill |
+| `POST /sandboxes/{id}/exec` | run a command |
+| `GET / PUT /sandboxes/{id}/file?path=...` | binary-safe file read/write |
+| `GET /sandboxes/{id}/trajectory` | JSONL trajectory |
+| `GET /sandboxes` / `GET /edges` / `GET /capacity` | introspection |
+
+**CLI** — operator tooling: `arlee deploy / destroy / health / edges / sandboxes / logs`.
+
+**Terraform** — `deploy/terraform/gcp/` provisions everything; `var.project_id` is the only thing without a safe default.
+
+### Quick start
+
+See [deploy/README.md](deploy/README.md) for the full 5-minute walkthrough. TL;DR:
+
+```bash
+cd deploy/terraform/gcp
+cp terraform.tfvars.example terraform.tfvars   # fill in project_id + operator_ip_cidr
+terraform init && terraform apply
+eval "$(terraform output -raw env_setup)"      # exports ARLEE_APISERVER + ARLEE_TOKEN
+arlee health                                    # both edges should be healthy
+```
+
+To run the v0 demo (3 SWE-bench gold patches, no LLM):
+
+```bash
+gcloud compute ssh arlee-apiserver --zone=us-central1-a --tunnel-through-iap --project=$PROJECT_ID
+sudo /opt/arlee-venv/bin/python /opt/arlee/examples/swebench_runner.py --gold
+# expect: 3/3 RESOLVED
+```
+
 ## Core Capabilities (Target)
 
 - **Unified sandbox API** — one client surface; execution backend (function-call pool, container, microVM, fullVM) is a parameter.
@@ -57,8 +125,8 @@ Arlee draws directly on the interface design of **DeepSeek Elastic Compute (DSec
 
 ## Roadmap (Sketch)
 
-1. Unified SDK surface and a container-backed reference implementation
-2. Trajectory log format + replay / fast-forward
+1. ✅ Unified SDK surface and a container-backed reference implementation (v0)
+2. Trajectory log format + replay / fast-forward (schema shipped in v0; replay deferred)
 3. Snapshot / fork primitives
 4. microVM backend (Firecracker)
 5. Trainer-side integration adapters (rollout workers, verifier hooks)

@@ -101,9 +101,10 @@ resource "google_compute_firewall" "edge_to_apiserver" {
 
 locals {
   apiserver_startup = templatefile("${path.module}/startup-script-apiserver.sh.tftpl", {
-    git_repo     = var.git_repo
-    git_ref      = var.git_ref
-    arlee_token  = random_password.arlee_token.result
+    git_repo         = var.git_repo
+    git_ref          = var.git_ref
+    arlee_token      = random_password.arlee_token.result
+    release_base_url = var.release_base_url
   })
 
   apiserver_internal_url = "http://${google_compute_instance.apiserver.network_interface[0].network_ip}:8080"
@@ -163,11 +164,10 @@ resource "google_compute_instance" "edge" {
 
   metadata = {
     startup-script = templatefile("${path.module}/startup-script-edge.sh.tftpl", {
-      git_repo        = var.git_repo
-      git_ref         = var.git_ref
-      arlee_token     = random_password.arlee_token.result
-      apiserver_url   = local.apiserver_internal_url
-      edge_index      = count.index + 1
+      arlee_token      = random_password.arlee_token.result
+      apiserver_url    = local.apiserver_internal_url
+      edge_index       = count.index + 1
+      release_base_url = var.release_base_url
     })
   }
 
