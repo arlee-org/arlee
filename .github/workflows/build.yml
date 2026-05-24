@@ -1,0 +1,54 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # publish release artifacts
+
+concurrency:
+  group: build-main
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: arlee-release
+
+      - name: cargo build --release
+        run: |
+          cargo build --release -p arlee-apiserver -p arlee-edge
+
+      - name: Stage artifacts
+        run: |
+          mkdir -p dist
+          cp target/release/arlee-apiserver dist/
+          cp target/release/arlee-edge dist/
+          (cd dist && sha256sum arlee-apiserver arlee-edge > SHA256SUMS)
+          ls -la dist/
+
+      - name: Publish rolling release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: main-latest
+          name: "main (latest commit)"
+          body: |
+            Auto-built from main branch.
+
+            Commit: ${{ github.sha }}
+            Run: ${{ github.run_id }}
+          prerelease: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/arlee-apiserver
+            dist/arlee-edge
+            dist/SHA256SUMS
