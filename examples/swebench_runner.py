@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -26,13 +27,18 @@ from typing import Any
 import arlee  # noqa: F401  — for side-effect imports / version
 from arlee import Client
 
-# Three SWE-bench Verified instance IDs chosen to be small / quick to evaluate.
-# All have small repos, fast test suites, and published docker images.
+# Three SWE-bench Verified instance IDs chosen for smallest combined test count.
+# Picked from `princeton-nlp/SWE-bench_Verified`; all have small patches and
+# small repos by SWE-bench standards.
 DEFAULT_INSTANCE_IDS = [
-    "marshmallow-code__marshmallow-1359",
-    "sqlfluff__sqlfluff-1517",
-    "pvlib__pvlib-python-1072",
+    "sympy__sympy-14711",                      # F2P=15, P2P=47
+    "django__django-12419",                    # F2P=85, P2P=2
+    "scikit-learn__scikit-learn-14141",        # F2P=65, P2P=139
 ]
+
+# Long client timeout: SWE-bench images are 1-3 GB so first-time pull alone can
+# take 1-5 min, and the eval pytest run can also be multi-minute.
+CLIENT_TIMEOUT_SECONDS = 1200.0
 
 
 @dataclass
@@ -158,7 +164,12 @@ async def main_async(instance_ids: list[str], gold_only: bool) -> int:
         raise SystemExit("v0 only supports --gold mode (the agent IS the gold patch)")
 
     instances = load_instances(instance_ids)
-    async with Client.from_env() as client:
+    apiserver = os.environ.get("ARLEE_APISERVER")
+    token = os.environ.get("ARLEE_TOKEN")
+    if not apiserver or not token:
+        raise SystemExit("set ARLEE_APISERVER and ARLEE_TOKEN")
+
+    async with Client(apiserver=apiserver, token=token, timeout=CLIENT_TIMEOUT_SECONDS) as client:
         results = await asyncio.gather(*(run_instance(client, i) for i in instances))
 
     n_passed = sum(1 for r in results if r.passed)
