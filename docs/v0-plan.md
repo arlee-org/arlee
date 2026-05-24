@@ -2,6 +2,10 @@
 
 This document specifies the v0 design and the verifiable checkpoints that define "done".
 
+> **Status: v0 acceptance MET (2026-05-24).** 3/3 SWE-bench Verified gold
+> patches resolved across 2 GCP Edge VMs. See "Validation record" at the
+> bottom for the run details.
+
 ## Acceptance criterion
 
 3 SWE-bench Verified gold patches pass via Arlee, sandboxes distributed across 2 Edge VMs on GCP. No LLM in the loop — gold patches act as the agent, which makes v0 a regression test for Arlee itself.
@@ -243,3 +247,19 @@ The work between A and B is SWE-bench-specific (task image pull, patch applicati
 | Persistent Apiserver state | Rebuild from Edges on restart |
 | Trainer adapter (verl / slime) | SDK is designed for trainers as first-class consumers, but no adapter ships in v0 |
 | Streaming exec output | v0 returns full stdout/stderr after exec completes |
+
+## Validation record
+
+| Checkpoint | Run | Result |
+|---|---|---|
+| A (hello-world cloud sandbox) | 2026-05-23 ubuntu:22.04 via Apiserver→Edge | ✅ exec / file ops / trajectory all green |
+| B (3 SWE-bench gold patches) | 2026-05-23 parallel run | ✅ 3/3 RESOLVED, distributed across 2 Edges (django on edge-1; sympy + sklearn on edge-2) |
+
+Instance IDs used for B:
+- `sympy__sympy-14711`
+- `django__django-12419`
+- `scikit-learn__scikit-learn-14141`
+
+Notable post-v0-acceptance bugs found during validation (already fixed):
+- **Scheduler race**: pre-fix least-loaded only read sandbox_count (10s heartbeat lag), so 3 concurrent picks all stacked on the same Edge. Fixed by adding `pick_least_loaded` to State which atomically picks + optimistically increments under a write lock; failure paths call `release_reservation` to roll back.
+- **Dev/IaC leak**: our dev GCP project ID (`arlee-497222`) was the default for `var.project_id`. Removed the default; now a required variable. The dev value lives only in the gitignored `terraform.tfvars`.
