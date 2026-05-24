@@ -22,10 +22,14 @@ single GCP project: 1 Apiserver VM + N Edge VMs (default N=2), in one VPC.
   gcloud services enable compute.googleapis.com --project=$PROJECT_ID
   ```
 - `terraform >= 1.6`.
-- The Arlee repo accessible at the URL given by `var.git_repo` (default
-  `https://github.com/arlee-org/arlee.git`, `main` branch). The VMs clone
-  it on first boot and run `cargo build --release`. If you forked the
-  repo, override `git_repo` to point at your fork.
+- Pre-built `arlee-apiserver` and `arlee-edge` binaries accessible at the
+  URL given by `var.release_base_url` (default
+  `https://github.com/arlee-org/arlee/releases/download/main-latest`,
+  built by `.github/workflows/build.yml` on every push to main). The VMs
+  `curl` them on first boot. If you fork, push your branch so the workflow
+  publishes a release on your repo, then override `release_base_url`
+  (and `git_repo`, which still gets cloned on the Apiserver VM for the
+  Python SDK source and `examples/`).
 
 ## 5-minute deploy
 
@@ -40,9 +44,10 @@ terraform init
 terraform apply
 ```
 
-First boot takes ~5–10 minutes because each VM compiles the Rust binaries
-from source. The `apply` step itself returns once VMs exist; readiness is
-deferred to `systemctl` on the VMs.
+First boot takes ~30–90 seconds: each VM does an `apt-get install` and
+a `curl` of the release binary, then systemd starts the service. The
+`apply` step itself returns once the VMs exist; readiness is deferred to
+`systemctl` on the VMs, so give it a minute before `arlee health`.
 
 ## Connect
 
