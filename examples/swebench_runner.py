@@ -76,7 +76,7 @@ async def run_instance(
         await client.write_file(sb.id, "/tmp/gold.patch", gold_patch.encode())
         gold_apply = await client.exec(
             sb.id,
-            "cd /testbed && git apply --allow-empty -v /tmp/gold.patch",
+            "cd /testbed && git apply /tmp/gold.patch",
             timeout=120,
         )
         if gold_apply.exit_code != 0:
