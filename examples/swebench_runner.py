@@ -1,13 +1,13 @@
 """Drive 3 SWE-bench Verified gold patches end-to-end through Arlee.
 
-Acceptance criterion for Arlee v0: all 3 tasks should produce a `PASS` —
-the SWE-bench grader sees every test in FAIL_TO_PASS go green and every test
-in PASS_TO_PASS still green.
+Acceptance criterion for Arlee v0: all 3 tasks should produce `resolved=True`
+as reported by `swebench.harness.grading.get_eval_report` — i.e. every test
+in FAIL_TO_PASS goes green and every test in PASS_TO_PASS stays green.
 
 Run from the Apiserver VM (where the Python SDK + swebench package are
 installed), with ARLEE_APISERVER and ARLEE_TOKEN exported:
 
-    python examples/swebench_runner.py --gold
+    sudo -E /opt/arlee-venv/bin/python /opt/arlee/examples/swebench_runner.py --gold
 
 By default it runs 3 hardcoded instance IDs concurrently so the Apiserver
 spreads them across the available Edges. Each instance pulls a ~1-3 GB
@@ -18,18 +18,18 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
-import re
 import sys
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
-import arlee  # noqa: F401  — for side-effect imports / version
+import arlee  # noqa: F401  — for version
 from arlee import Client
 
 # Three SWE-bench Verified instance IDs chosen for smallest combined test count.
-# Picked from `princeton-nlp/SWE-bench_Verified`; all have small patches and
-# small repos by SWE-bench standards.
 DEFAULT_INSTANCE_IDS = [
     "sympy__sympy-14711",                      # F2P=15, P2P=47
     "django__django-12419",                    # F2P=85, P2P=2
@@ -38,106 +38,111 @@ DEFAULT_INSTANCE_IDS = [
 
 # Long client timeout: SWE-bench images are 1-3 GB so first-time pull alone can
 # take 1-5 min, and the eval pytest run can also be multi-minute.
-CLIENT_TIMEOUT_SECONDS = 1200.0
+CLIENT_TIMEOUT_SECONDS = 1800.0
+
+
+def docker_hub_image(instance_id: str) -> str:
+    """SWE-bench publishes images at swebench/sweb.eval.x86_64.<munged>:latest
+    where every `__` in the instance_id is replaced with `_1776_` (Docker
+    image name conventions / SWE-bench internal marker)."""
+    munged = instance_id.replace("__", "_1776_")
+    return f"swebench/sweb.eval.x86_64.{munged}:latest"
 
 
 @dataclass
 class InstanceResult:
     instance_id: str
-    passed: bool
+    resolved: bool
     detail: str
     sandbox_id: str | None = None
-    exit_code: int | None = None
+    eval_log_path: Path | None = None
 
 
-async def _exec_or_fail(
-    client: Client, sandbox_id: str, command: str, label: str, timeout: float | None = None
-) -> str:
-    """Exec a command; return stdout on success, raise RuntimeError otherwise."""
-    r = await client.exec(sandbox_id, command, timeout=timeout)
-    if r.exit_code != 0:
-        raise RuntimeError(
-            f"{label} failed (exit={r.exit_code})\nstdout:\n{r.stdout}\nstderr:\n{r.stderr}"
-        )
-    return r.stdout
-
-
-def _parse_test_log(log: str, fail_to_pass: list[str], pass_to_pass: list[str]) -> tuple[bool, str]:
-    """Return (passed, detail). passed = every FAIL_TO_PASS passes AND every PASS_TO_PASS still passes."""
-    # The SWE-bench eval log format is pytest-y: lines like "PASSED tests/x.py::test_y"
-    # or "FAILED tests/x.py::test_y - ...".
-    statuses: dict[str, str] = {}
-    for line in log.splitlines():
-        m = re.match(r"^(PASSED|FAILED|ERROR|SKIPPED)\s+(\S+)", line.strip())
-        if m:
-            statuses[m.group(2)] = m.group(1)
-
-    missing_f2p = [t for t in fail_to_pass if t not in statuses]
-    failed_f2p = [t for t in fail_to_pass if statuses.get(t) != "PASSED"]
-    failed_p2p = [t for t in pass_to_pass if statuses.get(t) not in (None, "PASSED")]
-
-    if missing_f2p:
-        return False, f"missing FAIL_TO_PASS results: {missing_f2p[:5]}"
-    if failed_f2p:
-        return False, f"FAIL_TO_PASS still failing: {failed_f2p[:5]}"
-    if failed_p2p:
-        return False, f"PASS_TO_PASS regressed: {failed_p2p[:5]}"
-    return True, f"all {len(fail_to_pass)} FAIL_TO_PASS + {len(pass_to_pass)} PASS_TO_PASS green"
-
-
-async def run_instance(client: Client, instance: dict[str, Any]) -> InstanceResult:
+async def run_instance(
+    client: Client, instance: dict[str, Any], log_dir: Path
+) -> InstanceResult:
+    from swebench.harness.grading import get_eval_report
     from swebench.harness.test_spec.test_spec import make_test_spec
 
     inst_id = instance["instance_id"]
-    image = f"swebench/sweb.eval.x86_64.{inst_id}:latest"
+    image = docker_hub_image(inst_id)
     test_spec = make_test_spec(instance)
+    gold_patch = instance["patch"]
 
-    sb = await client.create_sandbox(image=image, timeout=600.0)
+    sb = await client.create_sandbox(image=image, timeout=1800.0)
     try:
-        # Apply the test_patch first (adds the new tests SWE-bench checks against).
-        await client.write_file(sb.id, "/tmp/test.patch", test_spec.test_patch.encode())
-        await _exec_or_fail(
-            client,
-            sb.id,
-            "cd /testbed && git apply --allow-empty /tmp/test.patch",
-            "apply test_patch",
-            timeout=60,
-        )
-
         # Apply the gold patch (the "model output" we're evaluating).
-        gold = instance["patch"]
-        await client.write_file(sb.id, "/tmp/gold.patch", gold.encode())
-        await _exec_or_fail(
-            client,
+        # eval_script does NOT apply the model patch; it only applies test_patch.
+        await client.write_file(sb.id, "/tmp/gold.patch", gold_patch.encode())
+        gold_apply = await client.exec(
             sb.id,
-            "cd /testbed && git apply --allow-empty /tmp/gold.patch",
-            "apply gold patch",
-            timeout=60,
+            "cd /testbed && git apply --allow-empty -v /tmp/gold.patch",
+            timeout=120,
         )
+        if gold_apply.exit_code != 0:
+            return InstanceResult(
+                instance_id=inst_id,
+                resolved=False,
+                detail=f"gold patch apply failed (exit={gold_apply.exit_code}): "
+                f"{gold_apply.stderr[:500]}",
+                sandbox_id=sb.id,
+            )
 
-        # Drop the per-instance eval script and run it. SWE-bench's eval_script
-        # already activates the conda env, sets cwd, and invokes pytest.
+        # Write eval_script and run it. eval_script handles conda activation,
+        # test_patch application, and runs the test command. Per swebench, it
+        # uses `set -uxo pipefail` (no -e), so its exit code does not reflect
+        # test pass/fail — we have to parse the log.
         await client.write_file(sb.id, "/eval.sh", test_spec.eval_script.encode())
         await client.exec(sb.id, "chmod +x /eval.sh")
-        r = await client.exec(sb.id, "/eval.sh", timeout=1200.0)
+        eval_run = await client.exec(sb.id, "/eval.sh", timeout=1500.0)
+        log_content = eval_run.stdout + eval_run.stderr
 
-        passed, detail = _parse_test_log(
-            r.stdout + "\n" + r.stderr,
-            instance["FAIL_TO_PASS"],
-            instance["PASS_TO_PASS"],
+        # Persist log locally so get_eval_report can read it from a path.
+        log_path = log_dir / f"{inst_id}.log"
+        log_path.write_text(log_content)
+
+        # SWE-bench grading.
+        report = get_eval_report(
+            test_spec=test_spec,
+            prediction={
+                "instance_id": inst_id,
+                "model_patch": gold_patch,
+            },
+            test_log_path=str(log_path),
+            include_tests_status=True,
         )
+        # report is keyed by instance_id.
+        ir = report.get(inst_id, {})
+        resolved = bool(ir.get("resolved", False))
+        ts = ir.get("tests_status", {}) or {}
+        f2p = ts.get("FAIL_TO_PASS", {}) or {}
+        p2p = ts.get("PASS_TO_PASS", {}) or {}
+        if resolved:
+            detail = (
+                f"FAIL_TO_PASS {len(f2p.get('success', []))} pass / "
+                f"{len(f2p.get('failure', []))} fail; "
+                f"PASS_TO_PASS {len(p2p.get('success', []))} pass / "
+                f"{len(p2p.get('failure', []))} fail"
+            )
+        else:
+            f2p_fail = f2p.get("failure", [])[:3]
+            p2p_fail = p2p.get("failure", [])[:3]
+            detail = (
+                f"not resolved (eval exit={eval_run.exit_code}); "
+                f"F2P fails={f2p_fail}; P2P fails={p2p_fail}"
+            )
         return InstanceResult(
             instance_id=inst_id,
-            passed=passed,
+            resolved=resolved,
             detail=detail,
             sandbox_id=sb.id,
-            exit_code=r.exit_code,
+            eval_log_path=log_path,
         )
     except Exception as e:
         return InstanceResult(
             instance_id=inst_id,
-            passed=False,
-            detail=f"runner error: {e}",
+            resolved=False,
+            detail=f"runner error: {e!r}",
             sandbox_id=sb.id if "sb" in locals() else None,
         )
     finally:
@@ -148,7 +153,6 @@ async def run_instance(client: Client, instance: dict[str, Any]) -> InstanceResu
 
 
 def load_instances(instance_ids: list[str]) -> list[dict[str, Any]]:
-    """Load instance metadata from HuggingFace SWE-bench Verified."""
     from datasets import load_dataset
 
     ds = load_dataset("princeton-nlp/SWE-bench_Verified", split="test")
@@ -159,7 +163,7 @@ def load_instances(instance_ids: list[str]) -> list[dict[str, Any]]:
     return [by_id[i] for i in instance_ids]
 
 
-async def main_async(instance_ids: list[str], gold_only: bool) -> int:
+async def main_async(instance_ids: list[str], gold_only: bool, log_dir: Path) -> int:
     if not gold_only:
         raise SystemExit("v0 only supports --gold mode (the agent IS the gold patch)")
 
@@ -169,17 +173,20 @@ async def main_async(instance_ids: list[str], gold_only: bool) -> int:
     if not apiserver or not token:
         raise SystemExit("set ARLEE_APISERVER and ARLEE_TOKEN")
 
-    async with Client(apiserver=apiserver, token=token, timeout=CLIENT_TIMEOUT_SECONDS) as client:
-        results = await asyncio.gather(*(run_instance(client, i) for i in instances))
+    log_dir.mkdir(parents=True, exist_ok=True)
 
-    n_passed = sum(1 for r in results if r.passed)
+    async with Client(apiserver=apiserver, token=token, timeout=CLIENT_TIMEOUT_SECONDS) as client:
+        results = await asyncio.gather(*(run_instance(client, i, log_dir) for i in instances))
+
+    n_resolved = sum(1 for r in results if r.resolved)
+    print()
     for r in results:
-        mark = "PASS" if r.passed else "FAIL"
+        mark = "PASS" if r.resolved else "FAIL"
         print(f"[{mark}] {r.instance_id} — {r.detail}")
         if r.sandbox_id:
-            print(f"        sandbox_id={r.sandbox_id}  exit_code={r.exit_code}")
-    print(f"\n=== {n_passed}/{len(results)} PASS ===")
-    return 0 if n_passed == len(results) else 1
+            print(f"        sandbox_id={r.sandbox_id}  eval_log={r.eval_log_path}")
+    print(f"\n=== {n_resolved}/{len(results)} RESOLVED ===")
+    return 0 if n_resolved == len(results) else 1
 
 
 def main() -> int:
@@ -194,9 +201,15 @@ def main() -> int:
         action="store_true",
         help="Use the instance's gold patch as the agent output (v0 mode).",
     )
+    p.add_argument(
+        "--log-dir",
+        type=Path,
+        default=Path(tempfile.gettempdir()) / "arlee-swebench-logs",
+        help="Where to write per-instance eval logs.",
+    )
     args = p.parse_args()
     ids = args.instance_id or DEFAULT_INSTANCE_IDS
-    return asyncio.run(main_async(ids, args.gold))
+    return asyncio.run(main_async(ids, args.gold, args.log_dir))
 
 
 if __name__ == "__main__":
